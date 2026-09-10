@@ -1,0 +1,513 @@
+{
+  "a35f9f3d-9e35-4143-93aa-b216ebd29578": [
+    {
+      "work_id": "eab8684a-32dc-4dd5-8798-dba6e6a11d21",
+      "period_type": "custom",
+      "period_start": "2026-08-29",
+      "period_end": "2026-09-05",
+      "volume": 220,
+      "period_label": "Произвольный период"
+    }
+  ],
+  "88eba2e2-cf4d-490c-9d42-e6c2742146f9": [
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-12",
+      "period_end": "2026-08-12",
+      "volume": 1,
+      "period_label": "12.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-13",
+      "period_end": "2026-08-13",
+      "volume": 0,
+      "period_label": "13.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-14",
+      "period_end": "2026-08-14",
+      "volume": 0,
+      "period_label": "14.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-15",
+      "period_end": "2026-08-15",
+      "volume": 0,
+      "period_label": "15.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-16",
+      "period_end": "2026-08-16",
+      "volume": 0,
+      "period_label": "16.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-17",
+      "period_end": "2026-08-17",
+      "volume": 0,
+      "period_label": "17.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-18",
+      "period_end": "2026-08-18",
+      "volume": 0,
+      "period_label": "18.08.2026"
+    },
+    {
+      "work_id": "35e8de78-c441-46e5-9463-0bf02f6a6f4c",
+      "period_type": "day",
+      "period_start": "2026-08-19",
+      "period_end": "2026-08-19",
+      "volume": 0,
+      "period_label": "19.08.2026"
+    }
+  ],
+  "05348fb7-d3af-494f-825e-722e8c0d4c2a": [],
+  "35ab52f5-2980-4a4d-a761-bfe8643f0254": [
+    {
+      "work_id": "568f3053-3b70-464e-828f-077d61d3c856",
+      "period_type": "week",
+      "period_start": "2026-08-14",
+      "period_end": "2026-08-16",
+      "volume": 2,
+      "period_label": "Неделя 37"
+    },
+    {
+      "work_id": "568f3053-3b70-464e-828f-077d61d3c856",
+      "period_type": "week",
+      "period_start": "2026-08-17",
+      "period_end": "2026-08-23",
+      "volume": 3,
+      "period_label": "Неделя 38"
+    },
+    {
+      "work_id": "568f3053-3b70-464e-828f-077d61d3c856",
+      "period_type": "week",
+      "period_start": "2026-08-24",
+      "period_end": "2026-08-30",
+      "volume": 1,
+      "period_label": "Неделя 39"
+    },
+    {
+      "work_id": "568f3053-3b70-464e-828f-077d61d3c856",
+      "period_type": "week",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-06",
+      "volume": 2,
+      "period_label": "Неделя 40"
+    },
+    {
+      "work_id": "568f3053-3b70-464e-828f-077d61d3c856",
+      "period_type": "week",
+      "period_start": "2026-09-07",
+      "period_end": "2026-09-12",
+      "volume": 1,
+      "period_label": "Неделя 41"
+    }
+  ],
+  "6b46da43-464b-4964-b2fc-cf1681cd4083": [
+    {
+      "work_id": "3df23dc4-912b-4bc6-be7d-3eb7df414049",
+      "period_type": "week",
+      "period_start": "2026-08-29",
+      "period_end": "2026-08-30",
+      "volume": 5,
+      "period_label": "Неделя 37"
+    },
+    {
+      "work_id": "3df23dc4-912b-4bc6-be7d-3eb7df414049",
+      "period_type": "week",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-03",
+      "volume": 5,
+      "period_label": "Неделя 38"
+    },
+    {
+      "work_id": "6ad032ba-92bd-4ca0-872e-22b8d16a0107",
+      "period_type": "day",
+      "period_start": "2026-08-24",
+      "period_end": "2026-08-24",
+      "volume": 1,
+      "period_label": "24.08.2026"
+    },
+    {
+      "work_id": "6ad032ba-92bd-4ca0-872e-22b8d16a0107",
+      "period_type": "day",
+      "period_start": "2026-08-25",
+      "period_end": "2026-08-25",
+      "volume": 2,
+      "period_label": "25.08.2026"
+    },
+    {
+      "work_id": "6ad032ba-92bd-4ca0-872e-22b8d16a0107",
+      "period_type": "day",
+      "period_start": "2026-08-26",
+      "period_end": "2026-08-26",
+      "volume": 0,
+      "period_label": "26.08.2026"
+    },
+    {
+      "work_id": "6ad032ba-92bd-4ca0-872e-22b8d16a0107",
+      "period_type": "day",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-27",
+      "volume": 0,
+      "period_label": "27.08.2026"
+    },
+    {
+      "work_id": "6ad032ba-92bd-4ca0-872e-22b8d16a0107",
+      "period_type": "day",
+      "period_start": "2026-08-28",
+      "period_end": "2026-08-28",
+      "volume": 0,
+      "period_label": "28.08.2026"
+    }
+  ],
+  "e28ce2b3-e0a7-4ced-91c5-e405752f67f2": [
+    {
+      "work_id": "3f023792-10bc-40bc-871e-5bde03a77144",
+      "period_type": "month",
+      "period_start": "2026-08-25",
+      "period_end": "2026-08-30",
+      "volume": 50000,
+      "period_label": "25.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "3f023792-10bc-40bc-871e-5bde03a77144",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-02",
+      "volume": 50000,
+      "period_label": "31.08.2026 - 02.09.2026"
+    },
+    {
+      "work_id": "eb255b06-56de-4d0a-8a5a-99cdf3e1cfb7",
+      "period_type": "month",
+      "period_start": "2026-09-03",
+      "period_end": "2026-09-07",
+      "volume": 100,
+      "period_label": "03.09.2026 - 07.09.2026"
+    }
+  ],
+  "8e70407f-ef46-49a0-b5f2-9601e85c27a2": [
+    {
+      "work_id": "ecb59e4a-3483-464f-82ba-99c68b5281fe",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 8,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "ecb59e4a-3483-464f-82ba-99c68b5281fe",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-15",
+      "volume": 2,
+      "period_label": "31.08.2026 - 15.09.2026"
+    },
+    {
+      "work_id": "8e281f57-f642-4175-9239-685c3df5931a",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 50,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "8e281f57-f642-4175-9239-685c3df5931a",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-25",
+      "volume": 50,
+      "period_label": "31.08.2026 - 25.09.2026"
+    },
+    {
+      "work_id": "edab9a74-13f1-4dd2-ab55-852560501c9c",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 100,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "edab9a74-13f1-4dd2-ab55-852560501c9c",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-15",
+      "volume": 100,
+      "period_label": "31.08.2026 - 15.09.2026"
+    }
+  ],
+  "2635c667-4966-496d-830f-03e1d77889aa": [
+    {
+      "work_id": "9405442f-46b4-4508-bcb9-2b893eaab9ff",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 5,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "9405442f-46b4-4508-bcb9-2b893eaab9ff",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-15",
+      "volume": 5,
+      "period_label": "31.08.2026 - 15.09.2026"
+    },
+    {
+      "work_id": "07134cc5-0628-46b3-aaa3-c3eaf2cb756a",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 50,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "07134cc5-0628-46b3-aaa3-c3eaf2cb756a",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-25",
+      "volume": 50,
+      "period_label": "31.08.2026 - 25.09.2026"
+    },
+    {
+      "work_id": "a3efd04a-670a-464b-8ebf-6ea81412824d",
+      "period_type": "month",
+      "period_start": "2026-08-27",
+      "period_end": "2026-08-30",
+      "volume": 100,
+      "period_label": "27.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "a3efd04a-670a-464b-8ebf-6ea81412824d",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-15",
+      "volume": 100,
+      "period_label": "31.08.2026 - 15.09.2026"
+    }
+  ],
+  "996ca889-b4d3-458f-b5c9-796c5307f33c": [
+    {
+      "work_id": "8eb857bd-6b84-42de-936b-e8f0a8f7c043",
+      "period_type": "month",
+      "period_start": "2026-09-03",
+      "period_end": "2026-09-08",
+      "volume": 0,
+      "period_label": "03.09.2026 - 08.09.2026"
+    },
+    {
+      "work_id": "ec6cc9dc-df4b-44ee-912f-9ae94ed5037e",
+      "period_type": "month",
+      "period_start": "2026-09-03",
+      "period_end": "2026-09-05",
+      "volume": 0,
+      "period_label": "03.09.2026 - 05.09.2026"
+    },
+    {
+      "work_id": "e55dd8c9-9151-4ea9-8b3a-b7f48a8f1ca8",
+      "period_type": "month",
+      "period_start": "2026-09-06",
+      "period_end": "2026-09-14",
+      "volume": 2,
+      "period_label": "06.09.2026 - 14.09.2026"
+    }
+  ],
+  "9d290a5e-08b7-4180-b1a5-af56b6f94bb6": [
+    {
+      "work_id": "96561f7d-7726-4ea0-916e-27294750b356",
+      "period_type": "month",
+      "period_start": "2026-08-28",
+      "period_end": "2026-08-30",
+      "volume": 50,
+      "period_label": "28.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "96561f7d-7726-4ea0-916e-27294750b356",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-06",
+      "volume": 50,
+      "period_label": "31.08.2026 - 06.09.2026"
+    },
+    {
+      "work_id": "a4b82f58-c686-47fc-8d9e-5d3793315a0d",
+      "period_type": "custom",
+      "period_start": "2026-09-07",
+      "period_end": "2026-09-07",
+      "volume": 100,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "60f6f350-5fa0-4e95-b6ea-e34853c71081",
+      "period_type": "week",
+      "period_start": "2026-09-07",
+      "period_end": "2026-09-13",
+      "volume": 70,
+      "period_label": "Неделя 37"
+    },
+    {
+      "work_id": "60f6f350-5fa0-4e95-b6ea-e34853c71081",
+      "period_type": "week",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-16",
+      "volume": 30,
+      "period_label": "Неделя 38"
+    }
+  ],
+  "3fd7e967-0f6e-4eb4-9842-12fee17a79f2": [
+    {
+      "work_id": "19665845-bd63-4da0-9a12-7e66aeb8d999",
+      "period_type": "month",
+      "period_start": "2026-09-27",
+      "period_end": "2026-09-29",
+      "volume": 50,
+      "period_label": "27.09.2026 - 29.09.2026"
+    },
+    {
+      "work_id": "19665845-bd63-4da0-9a12-7e66aeb8d999",
+      "period_type": "month",
+      "period_start": "2026-09-30",
+      "period_end": "2026-10-16",
+      "volume": 50,
+      "period_label": "30.09.2026 - 16.10.2026"
+    },
+    {
+      "work_id": "ba909ae0-f6b3-4c67-bde8-e79cb4a24166",
+      "period_type": "month",
+      "period_start": "2026-08-28",
+      "period_end": "2026-08-30",
+      "volume": 50,
+      "period_label": "28.08.2026 - 30.08.2026"
+    },
+    {
+      "work_id": "ba909ae0-f6b3-4c67-bde8-e79cb4a24166",
+      "period_type": "month",
+      "period_start": "2026-08-31",
+      "period_end": "2026-09-26",
+      "volume": 50,
+      "period_label": "31.08.2026 - 26.09.2026"
+    }
+  ],
+  "a926a187-f5bc-4bfd-9b25-913afeff30c5": [
+    {
+      "work_id": "9326a053-2149-41c9-9724-2f311e8b9a46",
+      "period_type": "custom",
+      "period_start": "2026-09-23",
+      "period_end": "2026-10-02",
+      "volume": 1000,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "5aa55c0c-4ed8-4944-a5af-75b42623ec9b",
+      "period_type": "custom",
+      "period_start": "2026-09-02",
+      "period_end": "2026-09-06",
+      "volume": 1000,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "9e633cc5-5de2-44ed-87e5-78373ed1a41f",
+      "period_type": "custom",
+      "period_start": "2026-09-23",
+      "period_end": "2026-09-25",
+      "volume": 50,
+      "period_label": "Произвольный период"
+    },
+    {
+      "work_id": "9e633cc5-5de2-44ed-87e5-78373ed1a41f",
+      "period_type": "custom",
+      "period_start": "2026-09-25",
+      "period_end": "2026-09-28",
+      "volume": 50,
+      "period_label": "Произвольный период"
+    }
+  ],
+  "6ef6dd8f-272f-4647-b8c4-f2cb72308fd2": [
+    {
+      "work_id": "062957ac-6d73-4c78-b33b-a794bb8918e9",
+      "period_type": "custom",
+      "period_start": "2026-09-02",
+      "period_end": "2026-09-02",
+      "volume": 1000,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "ecfd3a28-3c4a-4b42-be1e-8eb8efe9574d",
+      "period_type": "custom",
+      "period_start": "2026-09-03",
+      "period_end": "2026-09-08",
+      "volume": 100,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d4fc5df6-485a-4dc3-bb3b-9b68981f04ba",
+      "period_type": "custom",
+      "period_start": "2026-09-08",
+      "period_end": "2026-09-11",
+      "volume": 10,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "9fab6d94-519a-4f8c-8305-211462588b46",
+      "period_type": "custom",
+      "period_start": "2026-09-06",
+      "period_end": "2026-09-14",
+      "volume": 5,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "3c3c6174-41bd-4b62-8899-fda605c4f78e",
+      "period_type": "custom",
+      "period_start": "2026-09-02",
+      "period_end": "2026-09-02",
+      "volume": 1000,
+      "period_label": "Период выполнения"
+    }
+  ],
+  "2059d928-c763-4c69-99aa-8f13ff621146": [
+    {
+      "work_id": "5f7fa386-275c-4e20-9c58-e088644ebd82",
+      "period_type": "custom",
+      "period_start": "2026-09-09",
+      "period_end": "2026-09-28",
+      "volume": 10,
+      "period_label": "Период выполнения"
+    }
+  ],
+  "306c4ac4-e90a-460a-ae84-7daa275fbe2b": [
+    {
+      "work_id": "d6014373-d3ca-4813-8156-6a900fe9fceb",
+      "period_type": "custom",
+      "period_start": "2026-09-16",
+      "period_end": "2026-09-25",
+      "volume": 100,
+      "period_label": "Период выполнения"
+    }
+  ],
+  "5d88d0d4-314c-4481-824b-e0696c810848": [
+    {
+      "work_id": "90201b30-02c2-4b48-aca5-60ccb4a46619",
+      "period_type": "custom",
+      "period_start": "2026-09-09",
+      "period_end": "2026-09-28",
+      "volume": 10,
+      "period_label": "Период выполнения"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+node_modules
+.env
+.env.local
+logs
+*.log
+dist
+dist-ssr
+.DS_Store
+server/uploads/
+server/response
+server/{
