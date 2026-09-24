@@ -509,5 +509,583 @@
       "volume": 10,
       "period_label": "Период выполнения"
     }
+  ],
+  "b0fb13ca-0a72-42e0-a639-648b38b2bce4": [
+    {
+      "work_id": "628bdaed-5e82-434f-a630-0877c31b968b",
+      "period_type": "custom",
+      "period_start": "2026-09-24",
+      "period_end": "2026-09-24",
+      "volume": 12.68,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "466cc6c4-97dd-42db-9daf-487cbde97ce1",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 9.78,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "6ee4420b-9d74-46ed-8d7c-bfad1c0c99f5",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 34.9,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "43ec8151-c4aa-4e86-b5dd-fd53c156c1f6",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "612aa028-fd8b-4364-bcd9-61523cc69517",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 3,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "08fe9ef9-35b4-43a0-8e0a-5fdf27d4585d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 4.4,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d75646e1-1191-48d8-ad4f-e4c40e2c8e56",
+      "period_type": "custom",
+      "period_start": "2026-09-15",
+      "period_end": "2026-09-15",
+      "volume": 17.65,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "7262b335-c6d3-4dbf-b03b-c137222a0abf",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 100.37,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "0090ca14-b32d-412e-afd3-e206590cfad5",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "6f5caf5b-d176-4a77-8d52-a472a5af2103",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 6.5,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "2767c76f-463d-448d-9041-5a9300a8f3ce",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 4.2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "51b45fd2-00dc-4318-9c7a-816dd7f68d5c",
+      "period_type": "custom",
+      "period_start": "2026-09-15",
+      "period_end": "2026-09-15",
+      "volume": 8.79,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "b8e9eb0e-4b2f-415a-876f-7c4053e33702",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "0d354cf8-820c-4956-b74c-52b8b0559a6f",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "801c60d3-e5f9-4083-adc2-3e19e8a914e2",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a8e41e55-3f7d-4206-94f4-14127ba5c0d2",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d5f3290b-c77e-4ffe-8715-83fb138a6de8",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "c2bbc079-8ef0-431a-a202-4286bcdd0ecf",
+      "period_type": "custom",
+      "period_start": "2026-10-06",
+      "period_end": "2026-10-09",
+      "volume": 63.63,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e3a827e2-d75f-437d-ade6-0a4ee457df1f",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 52,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "c3788ebd-641d-4525-bd06-49f0cc680061",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 22,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "95240d9f-c004-4e72-9b2e-9720d74ef050",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1.2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d5553546-0ac1-49e1-abf8-f877c8d88dfa",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 15,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "38a47d10-fce2-4372-bf4a-98a7839240c1",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 52,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a6451e0e-ce05-4a18-b433-8d36e278fad8",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 60,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "b82a460d-1606-4a41-9f29-77e8a802316e",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "8846c91f-6174-4d1e-87a9-f7bd5c5c52bd",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d1bba181-79b3-47c6-9ef3-a531b5532c6c",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 84,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "6e902033-f0e8-4d6d-978f-fae5cdbf3ec3",
+      "period_type": "custom",
+      "period_start": "2026-10-02",
+      "period_end": "2026-10-05",
+      "volume": 26.1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e557dd2b-ed81-41a8-bdf9-b7e6c4757fb6",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 10.25,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d5cd058f-2ffa-439a-aaca-3da0c3357add",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 4.92,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "67646097-9971-4e32-9a35-a9917f63ba9f",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 0.02,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e71b52d2-eaeb-4bbb-8938-d96966f95950",
+      "period_type": "custom",
+      "period_start": "2026-10-02",
+      "period_end": "2026-10-02",
+      "volume": 7.86,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "97bfb7df-a679-4e6c-bb65-f2c94131c351",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 3.3,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "79b27645-f12c-4cc7-b53e-1e7ad150f91f",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 10.25,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "fca6af97-ee9a-4f67-8938-4dbf84e3332e",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 26.67,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "655cdc47-e3ae-4a14-ac2a-7cf31c7c20a3",
+      "period_type": "custom",
+      "period_start": "2026-09-15",
+      "period_end": "2026-09-15",
+      "volume": 3.56,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d8a84d51-966e-451a-b9c5-f4146119a462",
+      "period_type": "custom",
+      "period_start": "2026-09-18",
+      "period_end": "2026-09-18",
+      "volume": 14.84,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "331b762f-f255-47af-9115-62585a1ac6e1",
+      "period_type": "custom",
+      "period_start": "2026-09-26",
+      "period_end": "2026-09-29",
+      "volume": 46.35,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "c15ea507-7d21-4fa8-9c3d-df9723005bcc",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "bd0190fe-b323-48b6-aa09-f21a60f168c0",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 9.06,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a5cac54c-71bb-4153-804c-b896b1c865e2",
+      "period_type": "custom",
+      "period_start": "2026-10-01",
+      "period_end": "2026-10-01",
+      "volume": 84.24,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "f4bf89a4-0610-4879-943b-1f6e79e14b0d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e0656f3a-8929-4dfa-8b53-bd6ecfb551ae",
+      "period_type": "custom",
+      "period_start": "2026-09-26",
+      "period_end": "2026-09-26",
+      "volume": 9.21,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "5516b419-c462-4aad-b024-3f666f18bc1d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 60,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a187d9d0-3357-46ff-92fd-3bbc182f881d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 13,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "023d2b14-1b33-4414-af9c-8d026e60b6a3",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1.005,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e5187992-6afa-4745-8aa6-61fd7ed3855b",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 0.015,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "07a5b7ac-09df-4bb3-961e-7f46fb4548ef",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d1e1cca7-3fb2-4897-9c4f-08baeb5399aa",
+      "period_type": "custom",
+      "period_start": "2026-10-17",
+      "period_end": "2026-10-18",
+      "volume": 0.846,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a2dbb216-95ab-4471-93cb-b902f2b61f42",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 93.72,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "6398efef-c577-47ba-aedc-a81e6101af9e",
+      "period_type": "custom",
+      "period_start": "2026-09-21",
+      "period_end": "2026-09-24",
+      "volume": 1.899,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "8a88cf39-629b-4c2d-86db-54059761ebd4",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 7,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "5f91ad3b-d3c1-4d4c-bc3e-ef9e14d397df",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 194.09,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "7aaf996c-6bf0-484d-8343-c033874653b0",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-16",
+      "volume": 82.89,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "ef5efb05-02ca-4ac0-8fc7-4f3508daba17",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 4,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "87f40e7a-aa38-4998-979c-32cb3c6bc5c4",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 0.232,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "f62d14c7-097d-4e54-be55-a2b27a5ced6d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 45,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "0d4f6bdb-cf85-408e-a12d-45bbec3d2ca2",
+      "period_type": "custom",
+      "period_start": "2026-09-15",
+      "period_end": "2026-09-15",
+      "volume": 5.99,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "813b571b-4580-4172-943b-4c6cb6be7584",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 44.28,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "8b2a0b28-f468-4386-a383-d4d9a930777c",
+      "period_type": "custom",
+      "period_start": "2026-10-01",
+      "period_end": "2026-10-07",
+      "volume": 1.899,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "3fb7c1f4-5772-4c10-9254-5839a3cb368d",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 3,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a40a7b32-c670-40f2-8712-435cd52c3c57",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 0.2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "9c5a1f22-c957-441c-b5e6-07d17e8877ce",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1.56,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "4d16e0fd-efec-4a82-96a9-26473b7d5dd3",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 103.2,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "cdf938d4-73de-4f35-9fe7-378ef1529da7",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 0.005,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "34a6818a-a067-4433-a180-a7577b1c73e7",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "516de070-8b9c-4e46-93fc-bcb24df20847",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 6,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "e2fd3a80-6341-446e-958b-fb5790c4218c",
+      "period_type": "custom",
+      "period_start": "2026-10-01",
+      "period_end": "2026-10-01",
+      "volume": 65.22,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "f91fc1f8-7c21-41f5-9a85-a0cccf696a29",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 1,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "a190a155-81df-42bd-bbfc-7b97cd5d483b",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 36,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "40964cb9-4d23-4ac4-bedc-4af07063dff7",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 28.15,
+      "period_label": "Период выполнения"
+    },
+    {
+      "work_id": "d18857fa-b762-4cc6-a4e2-822fc599b6f3",
+      "period_type": "custom",
+      "period_start": "2026-09-14",
+      "period_end": "2026-09-14",
+      "volume": 4,
+      "period_label": "Период выполнения"
+    }
   ]
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Calendar, AlertCircle, Search, X, ChevronDown, Download } from 'lucide-react';
+import { Calendar, AlertCircle, Search, X, ChevronDown, Download, Loader } from 'lucide-react';
 import SchedulingTab from './objects/SchedulingTab';
 import GeneralSchedulingTab from './objects/GeneralSchedulingTab';
 
@@ -11,26 +11,19 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
 
   const [showKpModal, setShowKpModal] = useState(false);
   const [kpStep, setKpStep] = useState(1);
+  // 'create' — мастер создания нового КП (только по проектам/объектам с утверждённой
+  // плановой/фактической сметой), 'open' — открыть уже начатый КП (только там, где
+  // календарный план уже есть). Определяет, какие проекты/объекты/сметы видны в мастере.
+  const [kpMode, setKpMode] = useState('create');
+  // Полный список смет системы (для вычисления, у каких проектов/объектов есть подходящие
+  // сметы) и id-шники смет, у которых уже есть начатый календарный план — грузятся один раз.
+  const [allEstimates, setAllEstimates] = useState([]);
+  const [scheduleDocIds, setScheduleDocIds] = useState(() => new Set());
+  // Пока эти два запроса не пришли, ещё непонятно, у каких проектов/объектов есть подходящие
+  // сметы — без этого флага мастер на секунду показывал "нет проектов", хотя система просто
+  // ещё не успела загрузить данные, и только потом список появлялся целиком.
+  const [loadingModeData, setLoadingModeData] = useState(true);
   const schedulingTabRef = useRef(null);
-
-  const estimates = useMemo(() => {
-    return rawEstimates.filter(est => {
-      const type = est.estimate_type || 'work';
-      if (estimateType === 'planned') {
-        return type === 'planned' && est.status === 'planned_approved';
-      }
-      if (estimateType === 'actual') {
-        return type === 'actual' && est.status === 'actual_formed';
-      }
-      return false;
-    });
-  }, [rawEstimates, estimateType]);
-
-  useEffect(() => {
-    setSelectedEstimateId('');
-    setSelectedEstimateLabel('');
-    setEstimateSearch('');
-  }, [estimateType]);
 
   const [selectedProjectId, setSelectedProjectId] = useState('');
   const [selectedObjectId, setSelectedObjectId] = useState('');
@@ -39,7 +32,81 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
 
   const [estimateSearch, setEstimateSearch] = useState('');
   const [estimateDropdownOpen, setEstimateDropdownOpen] = useState(false);
-  const [loadingOptions, setLoadingOptions] = useState(false);
+  // Раньше был один общий loadingOptions на проекты/объекты/сметы — каждый следующий шаг мастера
+  // повторно включал его, и уже пройденный шаг лишний раз мигал спиннером. Теперь у каждого шага
+  // свой флаг, они друг друга не задевают.
+  const [loadingProjectsList, setLoadingProjectsList] = useState(false);
+  const [loadingObjectsList, setLoadingObjectsList] = useState(false);
+  const [loadingEstimatesList, setLoadingEstimatesList] = useState(false);
+
+  useEffect(() => {
+    setLoadingModeData(true);
+    Promise.allSettled([
+      api.get('/estimates/all-test').then(r => setAllEstimates(r.data || [])),
+      api.get('/estimates/schedule-doc-ids').then(r => setScheduleDocIds(new Set(r.data?.docIds || [])))
+    ]).finally(() => setLoadingModeData(false));
+  }, []);
+
+  // Сметы, которые вообще годятся для КП: утверждённая плановая или сформированная
+  // фактическая версия (US: договор/КП строится только на таких сметах).
+  const approvedEstimates = useMemo(() => {
+    return allEstimates.filter(est => {
+      const type = est.estimate_type || 'work';
+      return (type === 'planned' && est.status === 'planned_approved') ||
+             (type === 'actual' && est.status === 'actual_formed');
+    });
+  }, [allEstimates]);
+
+  // Из них — те, где КП уже реально начат (хотя бы у одной работы проставлена дата начала).
+  const startedEstimates = useMemo(() => {
+    return approvedEstimates.filter(est => scheduleDocIds.has(est.id));
+  }, [approvedEstimates, scheduleDocIds]);
+
+  // Пул смет для текущего режима мастера — определяет, какие проекты/объекты вообще
+  // предлагаются на шагах 1-2 ("Создать" — где есть подходящая смета без КП роли не играет,
+  // "Открыть" — только там, где КП уже начат).
+  const modeEstimatePool = kpMode === 'open' ? startedEstimates : approvedEstimates;
+  const modeProjectIds = useMemo(() => new Set(modeEstimatePool.map(e => e.project_uuid || e.project_id).filter(Boolean)), [modeEstimatePool]);
+  const modeObjectIdsByProject = useMemo(() => {
+    const map = {};
+    modeEstimatePool.forEach(e => {
+      const pid = e.project_uuid || e.project_id;
+      if (!pid || !e.object_id) return;
+      if (!map[pid]) map[pid] = new Set();
+      map[pid].add(e.object_id);
+    });
+    return map;
+  }, [modeEstimatePool]);
+
+  const visibleProjects = useMemo(
+    () => projects.filter(p => modeProjectIds.has(p.id)),
+    [projects, modeProjectIds]
+  );
+  const visibleObjects = useMemo(() => {
+    const objIds = modeObjectIdsByProject[selectedProjectId];
+    if (!objIds) return [];
+    return objects.filter(o => objIds.has(o.id));
+  }, [objects, modeObjectIdsByProject, selectedProjectId]);
+
+  const estimates = useMemo(() => {
+    return rawEstimates.filter(est => {
+      const type = est.estimate_type || 'work';
+      const matchesType = estimateType === 'planned'
+        ? (type === 'planned' && est.status === 'planned_approved')
+        : estimateType === 'actual'
+          ? (type === 'actual' && est.status === 'actual_formed')
+          : false;
+      if (!matchesType) return false;
+      if (kpMode === 'open' && !scheduleDocIds.has(est.id)) return false;
+      return true;
+    });
+  }, [rawEstimates, estimateType, kpMode, scheduleDocIds]);
+
+  useEffect(() => {
+    setSelectedEstimateId('');
+    setSelectedEstimateLabel('');
+    setEstimateSearch('');
+  }, [estimateType]);
 
   const estimateDropdownRef = useRef(null);
   // Holds the object/estimate we still need to auto-select once their fetches land.
@@ -104,19 +171,19 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
   }, [selectedObjectId]);
 
   const fetchProjects = async () => {
-    setLoadingOptions(true);
+    setLoadingProjectsList(true);
     try {
       const res = await api.get('/estimates/projects');
       setProjects(res.data || []);
     } catch (err) {
       console.error('Error fetching projects:', err);
     } finally {
-      setLoadingOptions(false);
+      setLoadingProjectsList(false);
     }
   };
 
   const fetchObjects = async (projId) => {
-    setLoadingOptions(true);
+    setLoadingObjectsList(true);
     try {
       const res = await api.get(`/estimates/projects/${projId}/objects`);
       const list = res.data || [];
@@ -138,15 +205,17 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
     } catch (err) {
       console.error('Error fetching objects:', err);
     } finally {
-      setLoadingOptions(false);
+      setLoadingObjectsList(false);
     }
   };
 
-  const fetchEstimates = async (projId, objId) => {
-    setLoadingOptions(true);
+  // Сметы уже загружены целиком один раз в allEstimates (на монтировании) — здесь просто
+  // фильтруем их на клиенте вместо повторного тяжёлого запроса /estimates/all-test
+  // (раньше он дёргался заново при каждой смене объекта, отсюда и задержка).
+  const fetchEstimates = (projId, objId) => {
+    setLoadingEstimatesList(true);
     try {
-      const res = await api.get('/estimates/all-test');
-      const filtered = (res.data || []).filter(est =>
+      const filtered = allEstimates.filter(est =>
         (est.project_uuid === projId || est.project_id === projId) &&
         est.object_id === objId
       );
@@ -168,7 +237,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
     } catch (err) {
       console.error('Error fetching estimates:', err);
     } finally {
-      setLoadingOptions(false);
+      setLoadingEstimatesList(false);
     }
   };
 
@@ -265,32 +334,23 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', padding: '10px 0 20px 0' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px 0 10px 0' }}>
 
       {/* HEADER INFO STRIP OR PLACEHOLDER */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '16px 20px', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', padding: '10px 20px', borderRadius: '16px', border: '1px solid #e2e8f0' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '900', color: '#0f172a' }}>
-            {selectedEstimateId ? `📅 КП: ${selectedEstimateLabel}` : (lang === 'ru' ? 'Календарное планирование' : 'Scheduling')}
+            {selectedEstimateId ? `📅 ${t.cpShortLabel || 'КП'}: ${selectedEstimateLabel}` : (t.cpTitle || 'Календарное планирование')}
           </h2>
-          {selectedEstimateId && (
-            <div style={{ fontSize: '12px', fontWeight: '700', color: '#64748b', display: 'flex', gap: '12px' }}>
-              <span>📁 {projects.find(p => p.id === selectedProjectId)?.name}</span>
-              <span>📍 {objects.find(o => o.id === selectedObjectId)?.name}</span>
-              <span>⚙️ {estimateType === 'planned' ? 'Плановая смета' : 'Фактическая смета'}</span>
-              {(() => {
-                const est = rawEstimates.find(e => e.id === selectedEstimateId);
-                const bits = [est?.zone, est?.phase, est?.discipline].filter(Boolean);
-                return bits.length > 0 ? <span>🏗️ {bits.join(' / ')}</span> : null;
-              })()}
-            </div>
-          )}
+          {/* Раньше тут же дублировался проект/объект/тип/раздел — та же информация уже
+              показана чуть ниже в собственной шапке SchedulingTab (Проект/Версия/Статус),
+              оставили заголовок один раз, чтобы не отнимать место повтором. */}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {selectedEstimateId && (
             <button
               onClick={() => schedulingTabRef.current?.exportPDF()}
-              title={t.gprBtnExport || (lang === 'ru' ? 'Экспорт ГПР в PDF' : 'Export Schedule to PDF')}
+              title={t.cpBtnExportTitle || 'Экспорт ГПР в PDF'}
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px',
                 padding: '10px 18px',
@@ -303,11 +363,33 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                 fontSize: '13px'
               }}
             >
-              <Download size={16} /> {lang === 'ru' ? 'Экспорт ГПР' : 'Export Schedule'}
+              <Download size={16} /> {t.cpBtnExport || 'Экспорт ГПР'}
             </button>
           )}
           <button
             onClick={() => {
+              setKpMode('open');
+              setSelectedProjectId(''); setSelectedObjectId(''); setEstimateType('');
+              setKpStep(1);
+              setShowKpModal(true);
+            }}
+            style={{
+              padding: '10px 20px',
+              background: '#ffffff',
+              color: '#2563eb',
+              border: '1.5px solid #2563eb',
+              borderRadius: '12px',
+              fontWeight: '800',
+              cursor: 'pointer',
+              fontSize: '13px'
+            }}
+          >
+            {t.cpBtnOpen || 'Открыть КП'}
+          </button>
+          <button
+            onClick={() => {
+              setKpMode('create');
+              setSelectedProjectId(''); setSelectedObjectId(''); setEstimateType('');
               setKpStep(1);
               setShowKpModal(true);
             }}
@@ -323,7 +405,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
               boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
             }}
           >
-            {selectedEstimateId ? (lang === 'ru' ? 'Сменить / Создать КП' : 'Change / Create Schedule') : (lang === 'ru' ? 'Создать КП' : 'Create Schedule')}
+            {t.cpBtnCreate || 'Создать КП'}
           </button>
         </div>
       </div>
@@ -334,7 +416,9 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
           <div style={{ width: '90%', maxWidth: '520px', background: 'white', padding: '24px', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', display: 'flex', flexDirection: 'column', gap: '16px', boxSizing: 'border-box' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #e2e8f0', paddingBottom: '12px' }}>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '900', color: '#1e293b' }}>
-                {lang === 'ru' ? `Создание КП · Шаг ${kpStep} из 4` : `Create Schedule · Step ${kpStep} of 4`}
+                {kpMode === 'open'
+                  ? (t.cpModalTitleOpen || 'Открытие КП · Шаг {step} из 4').replace('{step}', kpStep)
+                  : (t.cpModalTitleCreate || 'Создание КП · Шаг {step} из 4').replace('{step}', kpStep)}
               </h3>
               <button onClick={() => setShowKpModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}>
                 <X size={20} />
@@ -344,20 +428,36 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
             {/* STEP 1: PROJECT */}
             {kpStep === 1 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <div>
-                  <label style={labelStyle}>{t.lblProject || 'Проект'}</label>
-                  <select
-                    value={selectedProjectId}
-                    onChange={(e) => setSelectedProjectId(e.target.value)}
-                    disabled={loadingOptions}
-                    style={selectStyle}
-                  >
-                    <option value="">-- {t.lblSelectProject || 'Выберите проект'} --</option>
-                    {projects.map(p => (
-                      <option key={p.id} value={p.id}>{p.code ? `[${p.code}] ` : ''}{p.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {(loadingModeData || loadingProjectsList) ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '30px', color: '#64748b' }}>
+                    <Loader size={18} style={{ animation: 'spin 1s linear infinite' }} />
+                    <span style={{ fontSize: '13px', fontWeight: '700' }}>{t.cpCheckingProjects || 'Проверяем, где уже есть подходящие сметы...'}</span>
+                  </div>
+                ) : visibleProjects.length === 0 ? (
+                  <div style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '12px', textAlign: 'center' }}>
+                    <AlertCircle size={28} color="#ef4444" style={{ margin: '0 auto 8px auto' }} />
+                    <div style={{ fontSize: '13px', fontWeight: '850', color: '#991b1b', lineHeight: '1.5' }}>
+                      {kpMode === 'open'
+                        ? (t.cpNoProjectsSchedule || 'Нет проектов с уже начатым календарным планом.')
+                        : (t.cpNoProjectsApproved || 'Нет проектов с утверждённой плановой или сформированной фактической сметой.')}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label style={labelStyle}>{t.lblProject || 'Проект'}</label>
+                    <select
+                      value={selectedProjectId}
+                      onChange={(e) => setSelectedProjectId(e.target.value)}
+                      disabled={loadingProjectsList}
+                      style={selectStyle}
+                    >
+                      <option value="">-- {t.lblSelectProject || 'Выберите проект'} --</option>
+                      {visibleProjects.map(p => (
+                        <option key={p.id} value={p.id}>{p.code ? `[${p.code}] ` : ''}{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
                   <button
                     onClick={() => setKpStep(2)}
@@ -372,7 +472,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                       cursor: selectedProjectId ? 'pointer' : 'not-allowed'
                     }}
                   >
-                    Далее →
+                    {t.estWizardBtnNext || 'Далее'} →
                   </button>
                 </div>
               </div>
@@ -382,22 +482,38 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
             {kpStep === 2 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ fontSize: '12px', color: '#64748b', background: '#f8fafc', padding: '10px', borderRadius: '8px' }}>
-                  <strong>Проект:</strong> {projects.find(p => p.id === selectedProjectId)?.name}
+                  <strong>{t.lblProject || 'Проект'}:</strong> {projects.find(p => p.id === selectedProjectId)?.name}
                 </div>
-                <div>
-                  <label style={labelStyle}>{t.lblObject || 'Объект'}</label>
-                  <select
-                    value={selectedObjectId}
-                    onChange={(e) => setSelectedObjectId(e.target.value)}
-                    disabled={loadingOptions}
-                    style={selectStyle}
-                  >
-                    <option value="">-- {t.lblSelectObject || 'Выберите объект'} --</option>
-                    {objects.map(obj => (
-                      <option key={obj.id} value={obj.id}>{obj.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {loadingObjectsList ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', padding: '30px', color: '#64748b' }}>
+                    <Loader size={18} style={{ animation: 'spin 1s linear infinite' }} />
+                    <span style={{ fontSize: '13px', fontWeight: '700' }}>{t.cpLoadingObjects || 'Загружаем объекты...'}</span>
+                  </div>
+                ) : visibleObjects.length === 0 ? (
+                  <div style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '12px', textAlign: 'center' }}>
+                    <AlertCircle size={28} color="#ef4444" style={{ margin: '0 auto 8px auto' }} />
+                    <div style={{ fontSize: '13px', fontWeight: '850', color: '#991b1b', lineHeight: '1.5' }}>
+                      {kpMode === 'open'
+                        ? (t.cpNoObjectsSchedule || 'В этом проекте нет объектов с уже начатым календарным планом.')
+                        : (t.cpNoObjectsApproved || 'В этом проекте нет объектов с утверждённой плановой или сформированной фактической сметой.')}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label style={labelStyle}>{t.lblObject || 'Объект'}</label>
+                    <select
+                      value={selectedObjectId}
+                      onChange={(e) => setSelectedObjectId(e.target.value)}
+                      disabled={loadingObjectsList}
+                      style={selectStyle}
+                    >
+                      <option value="">-- {t.lblSelectObject || 'Выберите объект'} --</option>
+                      {visibleObjects.map(obj => (
+                        <option key={obj.id} value={obj.id}>{obj.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '10px' }}>
                   <button
                     onClick={() => setKpStep(1)}
@@ -411,7 +527,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                       cursor: 'pointer'
                     }}
                   >
-                    ← Назад
+                    ← {t.estWizardBtnBack || 'Назад'}
                   </button>
                   <button
                     onClick={() => setKpStep(3)}
@@ -426,7 +542,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                       cursor: selectedObjectId ? 'pointer' : 'not-allowed'
                     }}
                   >
-                    Далее →
+                    {t.estWizardBtnNext || 'Далее'} →
                   </button>
                 </div>
               </div>
@@ -436,15 +552,14 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
             {kpStep === 3 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ fontSize: '12px', color: '#64748b', background: '#f8fafc', padding: '10px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div><strong>Проект:</strong> {projects.find(p => p.id === selectedProjectId)?.name}</div>
-                  <div><strong>Объект:</strong> {objects.find(o => o.id === selectedObjectId)?.name}</div>
+                  <div><strong>{t.lblProject || 'Проект'}:</strong> {projects.find(p => p.id === selectedProjectId)?.name}</div>
+                  <div><strong>{t.lblObject || 'Объект'}:</strong> {objects.find(o => o.id === selectedObjectId)?.name}</div>
                 </div>
                 <div>
                   <label style={labelStyle}>{t.schedEstType || 'Тип сметы'}</label>
                   <select
                     value={estimateType}
                     onChange={(e) => setEstimateType(e.target.value)}
-                    disabled={loadingOptions}
                     style={selectStyle}
                   >
                     <option value="">-- {t.schedSelectType || 'Выберите тип сметы'} --</option>
@@ -465,7 +580,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                       cursor: 'pointer'
                     }}
                   >
-                    ← Назад
+                    ← {t.estWizardBtnBack || 'Назад'}
                   </button>
                   <button
                     onClick={() => setKpStep(4)}
@@ -480,7 +595,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                       cursor: estimateType ? 'pointer' : 'not-allowed'
                     }}
                   >
-                    Далее →
+                    {t.estWizardBtnNext || 'Далее'} →
                   </button>
                 </div>
               </div>
@@ -490,23 +605,23 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
             {kpStep === 4 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ fontSize: '12px', color: '#64748b', background: '#f8fafc', padding: '10px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div><strong>Проект:</strong> {projects.find(p => p.id === selectedProjectId)?.name}</div>
-                  <div><strong>Объект:</strong> {objects.find(o => o.id === selectedObjectId)?.name}</div>
-                  <div><strong>Тип:</strong> {estimateType === 'planned' ? 'Плановая' : 'Фактическая'}</div>
+                  <div><strong>{t.lblProject || 'Проект'}:</strong> {projects.find(p => p.id === selectedProjectId)?.name}</div>
+                  <div><strong>{t.lblObject || 'Объект'}:</strong> {objects.find(o => o.id === selectedObjectId)?.name}</div>
+                  <div><strong>{t.cpLblType || 'Тип'}:</strong> {estimateType === 'planned' ? (t.schedTypePlanned || 'Плановая') : (t.schedTypeActual || 'Фактическая')}</div>
                 </div>
 
                 {estimates.length === 0 ? (
                   <div style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fee2e2', borderRadius: '12px', textAlign: 'center' }}>
                     <AlertCircle size={28} color="#ef4444" style={{ margin: '0 auto 8px auto' }} />
                     <div style={{ fontSize: '13px', fontWeight: '850', color: '#991b1b', lineHeight: '1.5' }}>
-                      {estimateType === 'planned' 
-                        ? 'Нет утвержденных плановых смет для данного объекта. Календарное планирование не может быть создано.' 
-                        : 'Нет сформированных фактических смет для данного объекта.'}
+                      {estimateType === 'planned'
+                        ? (t.cpNoPlannedEstimates || 'Нет утвержденных плановых смет для данного объекта. Календарное планирование не может быть создано.')
+                        : (t.cpNoActualEstimates || 'Нет сформированных фактических смет для данного объекта.')}
                     </div>
                   </div>
                 ) : (
                   <div ref={estimateDropdownRef} style={{ position: 'relative' }}>
-                    <label style={labelStyle}>Смета</label>
+                    <label style={labelStyle}>{t.cpLblEstimate || 'Смета'}</label>
                     <div
                       style={{
                         display: 'flex',
@@ -532,7 +647,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap'
                       }}>
-                        {selectedEstimateId ? selectedEstimateLabel : '-- Выберите смету --'}
+                        {selectedEstimateId ? selectedEstimateLabel : (t.cpPlaceholderSelectEstimate || '-- Выберите смету --')}
                       </span>
                       {selectedEstimateId ? (
                         <X
@@ -564,7 +679,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                           <input
                             autoFocus
                             type="text"
-                            placeholder="Поиск по номеру, зоне, фазе..."
+                            placeholder={t.cpPlaceholderSearchEstimate || 'Поиск по номеру, зоне, фазе...'}
                             value={estimateSearch}
                             onChange={(e) => setEstimateSearch(e.target.value)}
                             onClick={(e) => e.stopPropagation()}
@@ -663,7 +778,7 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
                         cursor: selectedEstimateId ? 'pointer' : 'not-allowed'
                       }}
                     >
-                      Открыть КП →
+                      {t.cpBtnOpen || 'Открыть КП'} →
                     </button>
                   )}
                 </div>
@@ -689,30 +804,54 @@ export default function CalendarPlanningPage({ api, lang = 'ru', t = {}, initial
         }}>
           <Calendar size={56} color="#3b82f6" style={{ marginBottom: '20px', background: '#eff6ff', padding: '12px', borderRadius: '16px' }} />
           <h3 style={{ fontSize: '16px', fontWeight: '900', color: '#0f172a', marginBottom: '6px' }}>
-            {lang === 'ru' ? 'Календарный план не выбран' : 'Calendar Schedule Not Selected'}
+            {t.cpEmptyTitle || 'Календарный план не выбран'}
           </h3>
           <p style={{ fontSize: '13px', color: '#64748b', maxWidth: '380px', lineHeight: '1.6', marginBottom: '20px' }}>
-            {lang === 'ru' ? 'Нажмите кнопку ниже, чтобы запустить пошаговый мастер создания или смены календарного планирования (КП).' : 'Click the button below to start the step-by-step wizard for schedule creation.'}
+            {t.cpEmptySubtitle || 'Откройте уже начатый календарный план или создайте новый по одной из смет.'}
           </p>
-          <button
-            onClick={() => {
-              setKpStep(1);
-              setShowKpModal(true);
-            }}
-            style={{
-              padding: '12px 28px',
-              background: '#2563eb',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              fontWeight: '800',
-              cursor: 'pointer',
-              fontSize: '14px',
-              boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
-            }}
-          >
-            {lang === 'ru' ? 'Создать КП' : 'Create КП'}
-          </button>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={() => {
+                setKpMode('open');
+                setSelectedProjectId(''); setSelectedObjectId(''); setEstimateType('');
+                setKpStep(1);
+                setShowKpModal(true);
+              }}
+              style={{
+                padding: '12px 28px',
+                background: '#ffffff',
+                color: '#2563eb',
+                border: '1.5px solid #2563eb',
+                borderRadius: '12px',
+                fontWeight: '800',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              {t.cpBtnOpen || 'Открыть КП'}
+            </button>
+            <button
+              onClick={() => {
+                setKpMode('create');
+                setSelectedProjectId(''); setSelectedObjectId(''); setEstimateType('');
+                setKpStep(1);
+                setShowKpModal(true);
+              }}
+              style={{
+                padding: '12px 28px',
+                background: '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                fontWeight: '800',
+                cursor: 'pointer',
+                fontSize: '14px',
+                boxShadow: '0 4px 12px rgba(37, 99, 235, 0.2)'
+              }}
+            >
+              {t.cpBtnCreate || 'Создать КП'}
+            </button>
+          </div>
         </div>
       ) : (
         <SchedulingTab

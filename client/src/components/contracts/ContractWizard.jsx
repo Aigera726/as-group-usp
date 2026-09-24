@@ -14,8 +14,8 @@ function getSteps(t) {
     { id: 1, label: t.contrStepProject || 'Проект',      icon: Building2 },
     { id: 2, label: t.contrStepObject || 'Объект',      icon: Building2 },
     { id: 3, label: t.contrStepContractor || 'Контрагент',  icon: Users },
-    { id: 4, label: t.contrStepContract || 'Договор',     icon: FileText },
-    { id: 5, label: t.contrStepItems || 'Позиции',      icon: Hammer },
+    { id: 4, label: t.contrStepItems || 'Позиции',      icon: Hammer },
+    { id: 5, label: t.contrStepContract || 'Договор',     icon: FileText },
     { id: 6, label: t.contrStepSummary || 'Итог',        icon: CheckCircle },
   ];
 }
@@ -276,7 +276,13 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
   }, [step, selectedContractor, selectedProject]);
 
   useEffect(() => {
-    if (step !== 5) return;
+    // Позиции теперь на шаге 4 (не 5 — тот стал шагом реквизитов договора). Ждём, пока тип
+    // договора действительно известен (выбран существующий договор или тип нового) — иначе
+    // не понятно, работы или ресурсы грузить, а при смене типа прямо на этом же шаге (не
+    // меняя step) запрос должен перезапуститься — поэтому тип теперь тоже в зависимостях.
+    if (step !== 4) return;
+    const typeChosen = contractMode === 'existing' ? !!selectedExistingContract : !!contractForm.contract_type;
+    if (!typeChosen) return;
     const isSupply = (selectedExistingContract?.contract_type || contractForm.contract_type) === 'SUPPLY';
     setLoadingWorks(true);
     const params = { project_id: selectedProject?.id };
@@ -289,7 +295,8 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
       })
       .catch(() => {})
       .finally(() => setLoadingWorks(false));
-  }, [step]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, contractMode, selectedExistingContract, contractForm.contract_type, selectedProject, selectedObject]);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -301,7 +308,7 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
     setSelectedAssignments(prev => {
       const cur = prev[itemId] || {};
       const next = { ...cur, [field]: value };
-      
+
       // Если ставим галочку и количество еще не введено или равно 0, предзаполняем его остатком
       if (field === 'checked' && value === true && (!cur.quantity || Number(cur.quantity) <= 0)) {
         const item = itemsForAssignment.find(i => i.id === itemId);
@@ -309,7 +316,22 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
           next.quantity = item.remaining_quantity;
         }
       }
-      
+
+      // Автоматически подставляем цену за единицу из сметы — в зависимости от чекбокса
+      // "С материалами": без материалов в стоимость входят только трудовые и машины/механизмы
+      // (price_without_materials), с материалами — все ресурсы работы (price_with_materials).
+      // Пересчитываем при первой отметке позиции и при каждом переключении чекбокса; дальше
+      // пользователь может поправить цену вручную — это его не перезапишет, пока он снова не
+      // тронет чекбокс. Для ресурсов (договор-поставка) чекбокса нет, price_with_materials
+      // не приходит — эта ветка их не трогает.
+      if ((field === 'checked' && value === true) || field === 'with_materials') {
+        const item = itemsForAssignment.find(i => i.id === itemId);
+        if (item && item.price_with_materials != null) {
+          const withMaterials = field === 'with_materials' ? value : !!cur.with_materials;
+          next.unit_price = withMaterials ? item.price_with_materials : item.price_without_materials;
+        }
+      }
+
       return { ...prev, [itemId]: next };
     });
   };
@@ -326,6 +348,17 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
   const checkedWorkIds = Object.entries(selectedAssignments)
     .filter(([, a]) => a.checked)
     .map(([id]) => id);
+
+  // Сумма договора считается автоматически из выбранных позиций (кол-во × цена за единицу,
+  // с учётом "с материалами"/"без материалов" — см. toggleAssignment). "Тендерная сумма" ниже
+  // остаётся как ручная альтернатива: если она указана, она и становится суммой договора,
+  // а система пропорционально пересчитывает стоимость каждой позиции под неё.
+  useEffect(() => {
+    const amount = contractForm.tender_amount ? Number(contractForm.tender_amount) : totalAssignedAmount;
+    const next = amount > 0 ? String(amount) : '';
+    setContractForm(p => (p.total_amount === next ? p : { ...p, total_amount: next }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalAssignedAmount, contractForm.tender_amount]);
 
   // Живой предпросмотр распределения тендерной суммы: пересчитываем с небольшой
   // задержкой при любом изменении суммы, отмеченных видов ресурсов или отмеченных
@@ -550,47 +583,52 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
     if (step === 2) return true; // object is optional
     if (step === 3) return !!selectedContractor;
     if (step === 4) {
-      if (contractMode === 'existing') {
-        return !!selectedExistingContract;
-      } else {
-        if (!contractForm.contract_number?.trim()) return false;
-        if (!contractForm.contract_name?.trim()) return false;
-        if (!contractForm.date_start) return false;
-        if (contractForm.contract_mode === 'STANDARD') {
-          if (!contractForm.total_amount || Number(contractForm.total_amount) <= 0) return false;
-          if (!contractForm.currency_id) return false;
-        }
-        return true;
-      }
-    }
-    if (step === 5) {
+      // Шаг "Позиции": нужен выбранный существующий договор (или тип нового договора),
+      // и хотя бы одна корректно назначенная позиция.
+      const typeChosen = contractMode === 'existing' ? !!selectedExistingContract : !!contractForm.contract_type;
+      if (!typeChosen) return false;
       if (assignedCount === 0) return false;
-      
+
       const hasOverAssignment = Object.entries(selectedAssignments).some(([id, a]) => {
         if (!a.checked) return false;
         const item = itemsForAssignment.find(i => i.id === id);
         if (!item) return false;
         return Number(a.quantity || 0) > item.remaining_quantity;
       });
-      
-      if (hasOverAssignment) {
-        setError(t.contrErrOverAssignment || 'Некоторые работы имеют превышение по объему назначения. Пожалуйста, исправьте объемы перед продолжением.');
-        return false;
+
+      return !hasOverAssignment;
+    }
+    if (step === 5) {
+      // Шаг "Договор": для существующего договора реквизиты не заполняются — уже есть.
+      if (contractMode === 'existing') return true;
+      if (!contractForm.contract_number?.trim()) return false;
+      if (!contractForm.contract_name?.trim()) return false;
+      if (!contractForm.date_start) return false;
+      if (contractForm.contract_mode === 'STANDARD') {
+        if (!totalAssignedAmount || totalAssignedAmount <= 0) return false;
+        if (!contractForm.currency_id) return false;
       }
-      
-      setError('');
       return true;
     }
     return true;
   };
 
   const goNext = () => {
-    if (!canNext()) return;
-    if (step === 4 && contractMode === 'existing') {
-      setStep(5);
-    } else {
-      setStep(s => s + 1);
+    if (step === 4) {
+      const hasOverAssignment = Object.entries(selectedAssignments).some(([id, a]) => {
+        if (!a.checked) return false;
+        const item = itemsForAssignment.find(i => i.id === id);
+        if (!item) return false;
+        return Number(a.quantity || 0) > item.remaining_quantity;
+      });
+      if (hasOverAssignment) {
+        setError(t.contrErrOverAssignment || 'Некоторые работы имеют превышение по объему назначения. Пожалуйста, исправьте объемы перед продолжением.');
+        return;
+      }
     }
+    if (!canNext()) return;
+    setError('');
+    setStep(s => s + 1);
   };
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -910,308 +948,120 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
     </div>
   );
 
-  const renderStep4 = () => (
-    <div>
-      <h3 style={styles.stepTitle}>{t.contrStep4Title || 'Договор'}</h3>
-      <p style={styles.stepSubtitle}>{t.contrStep4Subtitle || 'Выберите существующий договор или создайте новый'}</p>
-
-      {existingContracts.length > 0 && (
-        <>
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-              {[
-                { val: 'existing', label: t.contrChooseExisting || 'Выбрать существующий' },
-                { val: 'new', label: t.contrCreateNew || 'Создать новый' },
-              ].map(opt => (
-                <button
-                  key={opt.val}
-                  onClick={() => setContractMode(opt.val)}
-                  style={{
-                    padding: '10px 20px', borderRadius: 12, fontWeight: 700, fontSize: 13,
-                    border: `2px solid ${contractMode === opt.val ? '#3b82f6' : '#e2e8f0'}`,
-                    background: contractMode === opt.val ? '#eff6ff' : '#fff',
-                    color: contractMode === opt.val ? '#2563eb' : '#64748b',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {contractMode === 'existing' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
-              {existingContracts.map(c => {
-                const s = STATUS_LABELS[c.status] || STATUS_LABELS.DRAFT;
-                return (
-                  <div
-                    key={c.id}
-                    onClick={() => setSelectedExistingContract(c)}
-                    style={{
-                      ...styles.card,
-                      borderColor: selectedExistingContract?.id === c.id ? '#3b82f6' : 'transparent',
-                      background: selectedExistingContract?.id === c.id ? '#eff6ff' : '#f8fafc',
-                      padding: '14px 20px',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#1e293b' }}>
-                          №{c.contract_number} {c.contract_name ? `— ${c.contract_name}` : ''}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
-                          {c.contract_type === 'SUPPLY' ? (t.contrTypeSupply || '📦 Поставка') : (t.contrTypeSubcontract || '🔨 Подряд')}
-                          {c.date_start && ` • ${new Date(c.date_start).toLocaleDateString('ru-RU')}`}
-                          {c.date_end && ` — ${new Date(c.date_end).toLocaleDateString('ru-RU')}`}
-                        </div>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <span style={{ padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: s.bg, color: s.color }}>{s.label}</span>
-                        {selectedExistingContract?.id === c.id && <Check size={18} color="#2563eb" />}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </>
-      )}
-
-      {(contractMode === 'new' || existingContracts.length === 0) && (
-        <div style={{ background: '#f8fafc', borderRadius: 20, padding: '24px', border: '1px solid #e2e8f0' }}>
-          <h4 style={{ margin: '0 0 20px', fontWeight: 800, color: '#1e293b', fontSize: 16 }}>{t.contrCreateNewContractHeading || 'Создать новый договор'}</h4>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={styles.label}>{t.contrFieldContractType || 'Тип договора'}</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                {[
-                  { val: 'SUBCONTRACT', label: t.contrTypeSubcontractLong || '🔨 Подряд (Работы)', desc: t.contrTypeSubcontractDesc || 'Выполнение строительных работ' },
-                  { val: 'SUPPLY', label: t.contrTypeSupplyLong || '📦 Поставка (Материалы)', desc: t.contrTypeSupplyDesc || 'Поставка строительных материалов' },
-                ].map(opt => (
-                  <label
-                    key={opt.val}
-                    style={{
-                      border: `2px solid ${contractForm.contract_type === opt.val ? '#3b82f6' : '#e2e8f0'}`,
-                      borderRadius: 14, padding: '14px 16px', cursor: 'pointer',
-                      background: contractForm.contract_type === opt.val ? '#eff6ff' : '#fff',
-                    }}
-                  >
-                    <input
-                      type="radio" name="contract_type" value={opt.val}
-                      checked={contractForm.contract_type === opt.val}
-                      onChange={() => setContractForm(p => ({ ...p, contract_type: opt.val }))}
-                      style={{ display: 'none' }}
-                    />
-                    <div style={{ fontWeight: 700, fontSize: 14, color: contractForm.contract_type === opt.val ? '#2563eb' : '#1e293b' }}>{opt.label}</div>
-                    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{opt.desc}</div>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label style={styles.label}>{t.contrFieldContractMode || 'Режим договора'}</label>
-              <div style={{ display: 'flex', gap: 10 }}>
-                {[
-                  { val: 'STANDARD', label: t.contrModeStandard || 'Стандартный' },
-                  { val: 'OPEN', label: t.contrModeOpen || 'Открытый' },
-                ].map(opt => (
-                  <label key={opt.val} style={{
-                    flex: 1, border: `2px solid ${contractForm.contract_mode === opt.val ? '#1e293b' : '#e2e8f0'}`,
-                    borderRadius: 12, padding: '10px 14px', cursor: 'pointer', textAlign: 'center',
-                    background: contractForm.contract_mode === opt.val ? '#1e293b' : '#fff',
-                    color: contractForm.contract_mode === opt.val ? '#fff' : '#64748b',
-                    fontWeight: 700, fontSize: 12,
-                  }}>
-                    <input
-                      type="radio" name="contract_mode" value={opt.val}
-                      checked={contractForm.contract_mode === opt.val}
-                      onChange={() => setContractForm(p => ({ ...p, contract_mode: opt.val }))}
-                      style={{ display: 'none' }}
-                    />
-                    {opt.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label style={styles.label}>{t.contrFieldNumber || '№ Договора *'}</label>
-              <input style={styles.input} placeholder={t.contrNumberPlaceholder || 'Б/Н или №ДГ-2025-001'}
-                value={contractForm.contract_number}
-                onChange={e => setContractForm(p => ({ ...p, contract_number: e.target.value }))} />
-            </div>
-
-            <div>
-              <label style={styles.label}>{t.contrFieldDateStart || 'Дата начала *'}</label>
-              <input type="date" style={styles.input}
-                value={contractForm.date_start}
-                onChange={e => setContractForm(p => ({ ...p, date_start: e.target.value }))} />
-            </div>
-            <div>
-              <label style={styles.label}>{t.contrFieldDateEnd || 'Дата окончания'}</label>
-              <input type="date" style={styles.input}
-                value={contractForm.date_end}
-                onChange={e => setContractForm(p => ({ ...p, date_end: e.target.value }))} />
-            </div>
-
-            {contractForm.contract_mode === 'STANDARD' && (
-              <>
-                <div>
-                  <label style={styles.label}>{t.contrFieldTotalAmount || 'Общая сумма договора *'}</label>
-                  <input type="number" style={styles.input} placeholder="0"
-                    value={contractForm.total_amount}
-                    onChange={e => setContractForm(p => ({ ...p, total_amount: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={styles.label}>{t.contrFieldCurrency || 'Валюта *'}</label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      style={styles.input}
-                      placeholder={t.contrCurrencySearchPlaceholder || 'Введите название или код валюты...'}
-                      value={currencySearch}
-                      onFocus={() => setShowCurrencyDropdown(true)}
-                      onBlur={() => {
-                        setTimeout(() => setShowCurrencyDropdown(false), 200);
-                      }}
-                      onChange={e => {
-                        setCurrencySearch(e.target.value);
-                        setShowCurrencyDropdown(true);
-                        if (!e.target.value) {
-                          setContractForm(p => ({ ...p, currency_id: '' }));
-                        }
-                      }}
-                    />
-                    {showCurrencyDropdown && (
-                      <div style={{
-                        position: 'absolute',
-                        top: '100%',
-                        left: 0,
-                        right: 0,
-                        background: '#fff',
-                        border: '1.5px solid #cbd5e1',
-                        borderRadius: 12,
-                        maxHeight: 200,
-                        overflowY: 'auto',
-                        zIndex: 50,
-                        marginTop: 4,
-                        boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
-                      }}>
-                        {currencies.filter(c => {
-                          const s = currencySearch.toLowerCase();
-                          return (
-                            (c.name || '').toLowerCase().includes(s) ||
-                            (c.code || '').toLowerCase().includes(s) ||
-                            (c.symbol || '').toLowerCase().includes(s)
-                          );
-                        }).map(c => (
-                          <div
-                            key={c.id}
-                            onMouseDown={() => {
-                              setContractForm(p => ({ ...p, currency_id: c.id }));
-                              setCurrencySearch(`${c.name} (${c.symbol || c.code})`);
-                              setShowCurrencyDropdown(false);
-                            }}
-                            style={{
-                              padding: '10px 14px',
-                              cursor: 'pointer',
-                              fontSize: 13,
-                              borderBottom: '1px solid #f1f5f9',
-                              fontWeight: 600,
-                              color: '#1e293b',
-                              background: contractForm.currency_id === c.id ? '#eff6ff' : '#fff',
-                              transition: 'background 0.15s'
-                            }}
-                            onMouseEnter={e => e.target.style.background = '#f1f5f9'}
-                            onMouseLeave={e => e.target.style.background = contractForm.currency_id === c.id ? '#eff6ff' : '#fff'}
-                          >
-                            {c.name} ({c.symbol || c.code})
-                          </div>
-                        ))}
-                        {currencies.filter(c => {
-                          const s = currencySearch.toLowerCase();
-                          return (
-                            (c.name || '').toLowerCase().includes(s) ||
-                            (c.code || '').toLowerCase().includes(s) ||
-                            (c.symbol || '').toLowerCase().includes(s)
-                          );
-                        }).length === 0 && (
-                          <div style={{ padding: '10px 14px', color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
-                            {t.contrNothingFound || 'Ничего не найдено'}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </>
-            )}
-
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={styles.label}>{t.contrFieldNotes || 'Примечания'}</label>
-              <textarea style={{ ...styles.input, height: 80, resize: 'vertical' }} placeholder={t.contrNotesPlaceholder || 'Дополнительные условия...'}
-                value={contractForm.notes}
-                onChange={e => setContractForm(p => ({ ...p, notes: e.target.value }))} />
-            </div>
-
-            {/* Тендерная сумма: если договор заключён по итогам тендера на сумму, отличную
-                от сметной, распределяем её по работам пропорционально выбранным видам
-                ресурсов — считается после шага "Позиции", когда уже известно, какие
-                работы назначены договору. Только для подрядных договоров (не поставка). */}
-            {contractForm.contract_type !== 'SUPPLY' && (
-              <div style={{ gridColumn: '1 / -1', background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 14, padding: 16, marginTop: 4 }}>
-                <label style={styles.label}>{t.contrFieldTenderAmount || 'Тендерная сумма (необязательно)'}</label>
-                <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
-                  {t.contrTenderHint || 'Если сумма по итогам тендера отличается от сметной — укажите её здесь. Система пропорционально пересчитает стоимость каждой назначенной работы, сохранив исходные соотношения между ними.'}
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, alignItems: 'start' }}>
-                  <input type="number" style={styles.input} placeholder="0"
-                    value={contractForm.tender_amount}
-                    onChange={e => setContractForm(p => ({ ...p, tender_amount: e.target.value }))} />
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 6 }}>
-                      {t.contrTenderResourceTypesLabel || 'Распределять по видам ресурсов'}
-                    </div>
-                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                      {[
-                        { value: 'material', label: t.contrResTypeMaterial || 'Материалы' },
-                        { value: 'labor', label: t.contrResTypeLabor || 'Трудовые ресурсы' },
-                        { value: 'machine', label: t.contrResTypeMachine || 'Машины и механизмы' },
-                      ].map(opt => (
-                        <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={contractForm.tender_resource_types.includes(opt.value)}
-                            onChange={e => setContractForm(p => ({
-                              ...p,
-                              tender_resource_types: e.target.checked
-                                ? [...p.tender_resource_types, opt.value]
-                                : p.tender_resource_types.filter(v => v !== opt.value)
-                            }))}
-                          />
-                          {opt.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const renderStep5 = () => {
+  const renderStep4 = () => {
     const isSupplyType = (selectedExistingContract?.contract_type || contractForm.contract_type) === 'SUPPLY';
     const items = isSupplyType ? resourcesForAssignment : worksForAssignment;
+    // Тип договора должен быть известен до показа позиций — от него зависит, что назначаем:
+    // работы (подряд) или ресурсы (поставка). Для уже существующего договора тип берём из
+    // самого договора, для нового — ждём, пока пользователь выберет его ниже.
+    const typeChosen = contractMode === 'existing' ? !!selectedExistingContract : !!contractForm.contract_type;
 
     return (
       <div>
-        <h3 style={styles.stepTitle}>{isSupplyType ? (t.contrStep5TitleResources || '📦 Распределение ресурсов') : (t.contrStep5TitleWorks || '🔨 Распределение работ')}</h3>
+        <h3 style={styles.stepTitle}>{t.contrStep4Title || 'Позиции'}</h3>
+        <p style={styles.stepSubtitle}>{t.contrStep4Subtitle || 'Выберите договор (или его тип), затем отметьте позиции — сумма договора посчитается по ним автоматически'}</p>
+
+        {existingContracts.length > 0 && (
+          <>
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+                {[
+                  { val: 'existing', label: t.contrChooseExisting || 'Выбрать существующий' },
+                  { val: 'new', label: t.contrCreateNew || 'Создать новый' },
+                ].map(opt => (
+                  <button
+                    key={opt.val}
+                    onClick={() => setContractMode(opt.val)}
+                    style={{
+                      padding: '10px 20px', borderRadius: 12, fontWeight: 700, fontSize: 13,
+                      border: `2px solid ${contractMode === opt.val ? '#3b82f6' : '#e2e8f0'}`,
+                      background: contractMode === opt.val ? '#eff6ff' : '#fff',
+                      color: contractMode === opt.val ? '#2563eb' : '#64748b',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {contractMode === 'existing' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
+                {existingContracts.map(c => {
+                  const s = STATUS_LABELS[c.status] || STATUS_LABELS.DRAFT;
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => setSelectedExistingContract(c)}
+                      style={{
+                        ...styles.card,
+                        borderColor: selectedExistingContract?.id === c.id ? '#3b82f6' : 'transparent',
+                        background: selectedExistingContract?.id === c.id ? '#eff6ff' : '#f8fafc',
+                        padding: '14px 20px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: '#1e293b' }}>
+                            №{c.contract_number} {c.contract_name ? `— ${c.contract_name}` : ''}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                            {c.contract_type === 'SUPPLY' ? (t.contrTypeSupply || '📦 Поставка') : (t.contrTypeSubcontract || '🔨 Подряд')}
+                            {c.date_start && ` • ${new Date(c.date_start).toLocaleDateString('ru-RU')}`}
+                            {c.date_end && ` — ${new Date(c.date_end).toLocaleDateString('ru-RU')}`}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700, background: s.bg, color: s.color }}>{s.label}</span>
+                          {selectedExistingContract?.id === c.id && <Check size={18} color="#2563eb" />}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {(contractMode === 'new' || existingContracts.length === 0) && (
+          <div style={{ background: '#f8fafc', borderRadius: 20, padding: '24px', border: '1px solid #e2e8f0', marginBottom: 24 }}>
+            <label style={styles.label}>{t.contrFieldContractType || 'Тип договора'}</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {[
+                { val: 'SUBCONTRACT', label: t.contrTypeSubcontractLong || '🔨 Подряд (Работы)', desc: t.contrTypeSubcontractDesc || 'Выполнение строительных работ' },
+                { val: 'SUPPLY', label: t.contrTypeSupplyLong || '📦 Поставка (Материалы)', desc: t.contrTypeSupplyDesc || 'Поставка строительных материалов' },
+              ].map(opt => (
+                <label
+                  key={opt.val}
+                  style={{
+                    border: `2px solid ${contractForm.contract_type === opt.val ? '#3b82f6' : '#e2e8f0'}`,
+                    borderRadius: 14, padding: '14px 16px', cursor: 'pointer',
+                    background: contractForm.contract_type === opt.val ? '#eff6ff' : '#fff',
+                  }}
+                >
+                  <input
+                    type="radio" name="contract_type" value={opt.val}
+                    checked={contractForm.contract_type === opt.val}
+                    onChange={() => setContractForm(p => ({ ...p, contract_type: opt.val }))}
+                    style={{ display: 'none' }}
+                  />
+                  <div style={{ fontWeight: 700, fontSize: 14, color: contractForm.contract_type === opt.val ? '#2563eb' : '#1e293b' }}>{opt.label}</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{opt.desc}</div>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!typeChosen ? (
+          <div style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+            {t.contrChooseTypeFirst || 'Сначала выберите договор (или тип нового договора) выше — тогда появится список позиций.'}
+          </div>
+        ) : (
+          <>
+        <h4 style={{ margin: '8px 0 4px', fontWeight: 800, color: '#1e293b', fontSize: 16 }}>{isSupplyType ? (t.contrStep5TitleResources || '📦 Распределение ресурсов') : (t.contrStep5TitleWorks || '🔨 Распределение работ')}</h4>
         <p style={styles.stepSubtitle}>
           {isSupplyType
             ? (t.contrStep5SubtitleResources || 'Выберите ресурсы из смет и укажите количество для этого договора')
@@ -1380,6 +1230,221 @@ export default function ContractWizard({ api, onDone, onCancel, preselectedProje
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderStep5 = () => {
+    const curObj = currencies.find(c => c.id === contractForm.currency_id);
+    const curSym = curObj?.symbol || curObj?.code || '₸';
+
+    return (
+      <div>
+        <h3 style={styles.stepTitle}>{t.contrStep5Title || 'Реквизиты договора'}</h3>
+        <p style={styles.stepSubtitle}>{t.contrStep5Subtitle || 'Сумма уже посчитана по выбранным позициям — заполните остальные данные договора'}</p>
+
+        {contractMode === 'existing' ? (
+          <div style={{ background: '#f0fdf4', border: '1.5px solid #bbf7d0', borderRadius: 16, padding: 20, color: '#166534', fontWeight: 600 }}>
+            {t.contrExistingContractNoRequisites || 'Вы добавляете позиции к уже существующему договору — реквизиты заполнять не нужно, они уже заданы.'}
+          </div>
+        ) : (
+          <div style={{ background: '#f8fafc', borderRadius: 20, padding: '24px', border: '1px solid #e2e8f0' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div>
+                <label style={styles.label}>{t.contrFieldContractMode || 'Режим договора'}</label>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {[
+                    { val: 'STANDARD', label: t.contrModeStandard || 'Стандартный' },
+                    { val: 'OPEN', label: t.contrModeOpen || 'Открытый' },
+                  ].map(opt => (
+                    <label key={opt.val} style={{
+                      flex: 1, border: `2px solid ${contractForm.contract_mode === opt.val ? '#1e293b' : '#e2e8f0'}`,
+                      borderRadius: 12, padding: '10px 14px', cursor: 'pointer', textAlign: 'center',
+                      background: contractForm.contract_mode === opt.val ? '#1e293b' : '#fff',
+                      color: contractForm.contract_mode === opt.val ? '#fff' : '#64748b',
+                      fontWeight: 700, fontSize: 12,
+                    }}>
+                      <input
+                        type="radio" name="contract_mode" value={opt.val}
+                        checked={contractForm.contract_mode === opt.val}
+                        onChange={() => setContractForm(p => ({ ...p, contract_mode: opt.val }))}
+                        style={{ display: 'none' }}
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label style={styles.label}>{t.contrFieldNumber || '№ Договора *'}</label>
+                <input style={styles.input} placeholder={t.contrNumberPlaceholder || 'Б/Н или №ДГ-2025-001'}
+                  value={contractForm.contract_number}
+                  onChange={e => setContractForm(p => ({ ...p, contract_number: e.target.value }))} />
+              </div>
+
+              <div>
+                <label style={styles.label}>{t.contrFieldDateStart || 'Дата начала *'}</label>
+                <input type="date" style={styles.input}
+                  value={contractForm.date_start}
+                  onChange={e => setContractForm(p => ({ ...p, date_start: e.target.value }))} />
+              </div>
+              <div>
+                <label style={styles.label}>{t.contrFieldDateEnd || 'Дата окончания'}</label>
+                <input type="date" style={styles.input}
+                  value={contractForm.date_end}
+                  onChange={e => setContractForm(p => ({ ...p, date_end: e.target.value }))} />
+              </div>
+
+              {contractForm.contract_mode === 'STANDARD' && (
+                <>
+                  <div>
+                    <label style={styles.label}>{t.contrFieldTotalAmount || 'Общая сумма договора'}</label>
+                    <div style={{ ...styles.input, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#eff6ff', border: '2px solid #bfdbfe', fontWeight: 800, color: '#1d4ed8' }}>
+                      <span>{formatNum(totalAssignedAmount)} {curSym}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                      {t.contrTotalAutoHint || 'Считается автоматически по выбранным позициям (объём × цена/ед.). Чтобы указать другую сумму — заполните «Тендерная сумма» ниже.'}
+                    </div>
+                  </div>
+                  <div>
+                    <label style={styles.label}>{t.contrFieldCurrency || 'Валюта *'}</label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        style={styles.input}
+                        placeholder={t.contrCurrencySearchPlaceholder || 'Введите название или код валюты...'}
+                        value={currencySearch}
+                        onFocus={() => setShowCurrencyDropdown(true)}
+                        onBlur={() => {
+                          setTimeout(() => setShowCurrencyDropdown(false), 200);
+                        }}
+                        onChange={e => {
+                          setCurrencySearch(e.target.value);
+                          setShowCurrencyDropdown(true);
+                          if (!e.target.value) {
+                            setContractForm(p => ({ ...p, currency_id: '' }));
+                          }
+                        }}
+                      />
+                      {showCurrencyDropdown && (
+                        <div style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          background: '#fff',
+                          border: '1.5px solid #cbd5e1',
+                          borderRadius: 12,
+                          maxHeight: 200,
+                          overflowY: 'auto',
+                          zIndex: 50,
+                          marginTop: 4,
+                          boxShadow: '0 4px 12px rgba(0,0,0,0.08)'
+                        }}>
+                          {currencies.filter(c => {
+                            const s = currencySearch.toLowerCase();
+                            return (
+                              (c.name || '').toLowerCase().includes(s) ||
+                              (c.code || '').toLowerCase().includes(s) ||
+                              (c.symbol || '').toLowerCase().includes(s)
+                            );
+                          }).map(c => (
+                            <div
+                              key={c.id}
+                              onMouseDown={() => {
+                                setContractForm(p => ({ ...p, currency_id: c.id }));
+                                setCurrencySearch(`${c.name} (${c.symbol || c.code})`);
+                                setShowCurrencyDropdown(false);
+                              }}
+                              style={{
+                                padding: '10px 14px',
+                                cursor: 'pointer',
+                                fontSize: 13,
+                                borderBottom: '1px solid #f1f5f9',
+                                fontWeight: 600,
+                                color: '#1e293b',
+                                background: contractForm.currency_id === c.id ? '#eff6ff' : '#fff',
+                                transition: 'background 0.15s'
+                              }}
+                              onMouseEnter={e => e.target.style.background = '#f1f5f9'}
+                              onMouseLeave={e => e.target.style.background = contractForm.currency_id === c.id ? '#eff6ff' : '#fff'}
+                            >
+                              {c.name} ({c.symbol || c.code})
+                            </div>
+                          ))}
+                          {currencies.filter(c => {
+                            const s = currencySearch.toLowerCase();
+                            return (
+                              (c.name || '').toLowerCase().includes(s) ||
+                              (c.code || '').toLowerCase().includes(s) ||
+                              (c.symbol || '').toLowerCase().includes(s)
+                            );
+                          }).length === 0 && (
+                            <div style={{ padding: '10px 14px', color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
+                              {t.contrNothingFound || 'Ничего не найдено'}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={styles.label}>{t.contrFieldNotes || 'Примечания'}</label>
+                <textarea style={{ ...styles.input, height: 80, resize: 'vertical' }} placeholder={t.contrNotesPlaceholder || 'Дополнительные условия...'}
+                  value={contractForm.notes}
+                  onChange={e => setContractForm(p => ({ ...p, notes: e.target.value }))} />
+              </div>
+
+              {/* Тендерная сумма — ручная альтернатива автосчёту: если указана, становится
+                  суммой договора вместо автоматической, а стоимость каждой позиции
+                  пропорционально пересчитывается под неё. Только для подрядных договоров. */}
+              {contractForm.contract_type !== 'SUPPLY' && (
+                <div style={{ gridColumn: '1 / -1', background: '#f8fafc', border: '1.5px solid #e2e8f0', borderRadius: 14, padding: 16, marginTop: 4 }}>
+                  <label style={styles.label}>{t.contrFieldTenderAmount || 'Тендерная сумма (необязательно)'}</label>
+                  <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+                    {t.contrTenderHint || 'Если сумма по итогам тендера отличается от автоматически посчитанной — укажите её здесь. Система пропорционально пересчитает стоимость каждой назначенной позиции, сохранив исходные соотношения между ними.'}
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, alignItems: 'start' }}>
+                    <input type="number" style={styles.input} placeholder="0"
+                      value={contractForm.tender_amount}
+                      onChange={e => setContractForm(p => ({ ...p, tender_amount: e.target.value }))} />
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: 6 }}>
+                        {t.contrTenderResourceTypesLabel || 'Распределять по видам ресурсов'}
+                      </div>
+                      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                        {[
+                          { value: 'material', label: t.contrResTypeMaterial || 'Материалы' },
+                          { value: 'labor', label: t.contrResTypeLabor || 'Трудовые ресурсы' },
+                          { value: 'machine', label: t.contrResTypeMachine || 'Машины и механизмы' },
+                        ].map(opt => (
+                          <label key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={contractForm.tender_resource_types.includes(opt.value)}
+                              onChange={e => setContractForm(p => ({
+                                ...p,
+                                tender_resource_types: e.target.checked
+                                  ? [...p.tender_resource_types, opt.value]
+                                  : p.tender_resource_types.filter(v => v !== opt.value)
+                              }))}
+                            />
+                            {opt.label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

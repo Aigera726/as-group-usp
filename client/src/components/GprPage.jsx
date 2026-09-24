@@ -1433,6 +1433,17 @@ export default function GprPage({ userRole, lang, t, api, initialTarget = null, 
       ganttClone.style.overflow = 'visible';
       ganttClone.style.maxHeight = 'none';
       ganttClone.style.height = 'auto';
+      // Левая панель с названиями работ держится на `position: sticky` (чтобы не уезжать
+      // при горизонтальной прокрутке диаграммы) — html2canvas не умеет корректно снимать
+      // sticky-элементы после того, как overflow контейнера принудительно сброшен в
+      // visible: колонка с названиями схлопывается/пропадает, а сами бары и связи (они
+      // позиционированы иначе) остаются видны. Поэтому в клоне превращаем sticky в
+      // обычное позиционирование — панель просто встаёт в поток документа.
+      ganttClone.querySelectorAll('*').forEach(node => {
+        if (node.style && node.style.position === 'sticky') {
+          node.style.position = 'relative';
+        }
+      });
       const slot = element.querySelector('#gantt-export-slot');
       if (slot) slot.appendChild(ganttClone);
     }

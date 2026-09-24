@@ -44,6 +44,86 @@ async function recalculateDocTotal(doc_id) {
     }
 }
 
+// --- Сохранение корректировок объемов/ресурсов/коэффициентов, внесенных утверждающим (фин.директором) ---
+// перед решением по плановой версии (утверждение или отклонение) — BR-04
+async function saveApproverCorrections(docId, { works, resources, coefficients }) {
+    if (!(works && Array.isArray(works) && works.length > 0)) return;
+
+    const worksToUpsert = works.map(work => {
+        if (!work) return null;
+        const factVolume = work.fact_volume != null && work.fact_volume !== '' ? Number(work.fact_volume) : null;
+        return {
+            id: work.id,
+            doc_id: docId,
+            wbs_id: work.wbs_id,
+            work_id: work.work_id,
+            volume: work.volume,
+            price: work.price || 0,
+            amount: work.amount || 0,
+            fact_volume: factVolume,
+            fact_amount: work.fact_amount != null && work.fact_amount !== '' ? Number(work.fact_amount) : null,
+            is_excluded: work.is_excluded || false
+        };
+    }).filter(Boolean);
+
+    if (worksToUpsert.length > 0) {
+        const { error: worksErr } = await supabaseAdmin.from('est_doc_works').upsert(worksToUpsert);
+        if (worksErr) throw worksErr;
+    }
+
+    if (resources && Array.isArray(resources) && resources.length > 0) {
+        const resourcesToUpsert = resources.map(res => {
+            if (!res) return null;
+            const factNorm = res.fact_norm != null && res.fact_norm !== '' ? Number(res.fact_norm) : null;
+            const factQuantity = res.fact_quantity != null && res.fact_quantity !== '' ? Number(res.fact_quantity) : null;
+            const factPrice = res.fact_price != null && res.fact_price !== '' ? Number(res.fact_price) : null;
+            const factAmount = res.fact_amount != null && res.fact_amount !== ''
+                ? Number(res.fact_amount)
+                : (factQuantity != null && factPrice != null ? factQuantity * factPrice : null);
+            return {
+                id: res.id,
+                doc_id: docId,
+                work_id: res.work_id,
+                resource_id: res.resource_id,
+                norm: res.norm,
+                quantity: res.quantity,
+                price: res.price || 0,
+                amount: res.amount || 0,
+                source: res.source || null,
+                fact_norm: factNorm,
+                fact_quantity: factQuantity,
+                fact_price: factPrice,
+                fact_amount: factAmount,
+                is_excluded: res.is_excluded || false
+            };
+        }).filter(Boolean);
+
+        if (resourcesToUpsert.length > 0) {
+            const { error: resErr } = await supabaseAdmin.from('est_doc_resources').upsert(resourcesToUpsert);
+            if (resErr) throw resErr;
+        }
+    }
+
+    if (coefficients && Array.isArray(coefficients) && coefficients.length > 0) {
+        const coeffsToUpsert = coefficients.map(c => {
+            if (!c) return null;
+            return {
+                id: c.id,
+                doc_id: docId,
+                name: c.name,
+                type: c.type || 'overhead',
+                value_percent: c.value_percent
+            };
+        }).filter(Boolean);
+        if (coeffsToUpsert.length > 0) {
+            const { error: coeffsErr } = await supabaseAdmin.from('est_coefficients').upsert(coeffsToUpsert);
+            if (coeffsErr) throw coeffsErr;
+        }
+    }
+
+    await recalculateDocTotal(docId);
+}
+
 // --- ПРОВЕРКА БЛОКИРОВКИ СМЕТЫ (РАБОЧЕЙ ИЛИ ПЛАНОВОЙ/ФАКТИЧЕСКОЙ) ---
 async function checkIfDocLocked(docId) {
     if (!docId) return false;
@@ -59,9 +139,10 @@ async function checkIfDocLocked(docId) {
 
         // 1. Плановая версия сметы
         if (estType === 'planned') {
-            // Плановую версию можно редактировать в любом статусе (сформирована/на утверждении/
-            // утверждена/отклонена) — блокируем только когда по ней уже создана фактическая смета,
-            // чтобы плановая и фактическая не разъезжались друг с другом.
+            // Плановую смету в статусе 'planned_approved' или 'planned_inactive' редактировать нельзя
+            if (doc.status === 'planned_approved' || doc.status === 'planned_inactive') {
+                return true;
+            }
             const { data: actuals } = await supabaseAdmin
                 .from('est_documents')
                 .select('id')
@@ -206,10 +287,27 @@ router.get('/all-test', async (req, res) => {
             .from('wbs_templates')
             .select('name_ru, name_en, name_ka, name_az, name_tr');
 
-        // [AUTO ESTIMATE HIDING COMMENT]: Hide object-level WBS template estimates (where zone, phase, and discipline are all null)
+        // zone/phase/discipline = null сами по себе ничего не значат: так выглядит и пустая
+        // служебная WBS-заготовка объекта, и настоящая рабочая смета с работами (эти поля
+        // в разделе "Смета" никогда не заполняются). Различаем по наличию реальных работ -
+        // пустая заготовка их не имеет.
+        const docIdsWithNullFields = (data || [])
+            .filter(est => !est.zone && !est.phase && !est.discipline)
+            .map(est => est.id);
+
+        let docIdsWithWorks = new Set();
+        if (docIdsWithNullFields.length > 0) {
+            const { data: worksRows } = await supabaseAdmin
+                .from('est_doc_works')
+                .select('doc_id')
+                .in('doc_id', docIdsWithNullFields);
+            docIdsWithWorks = new Set((worksRows || []).map(w => w.doc_id));
+        }
+
+        // [AUTO ESTIMATE HIDING COMMENT]: Hide object-level WBS template estimates (where zone, phase, and discipline are all null AND there are no works yet)
         const filteredDocs = (data || []).filter(est => {
-            const isNotObjectTemplate = est.zone !== null || est.phase !== null || est.discipline !== null;
-            if (!isNotObjectTemplate) return false;
+            const isEmptyObjectTemplate = !est.zone && !est.phase && !est.discipline && !docIdsWithWorks.has(est.id);
+            if (isEmptyObjectTemplate) return false;
 
             // Смета скрытого (деактивированного) проекта не должна всплывать в общем списке —
             // проект спрятан из реестра проектов именно для того, чтобы не мешаться, а смета
@@ -273,6 +371,25 @@ router.get('/all-test', async (req, res) => {
         res.json(mappedData);
     } catch (err) {
         console.error('[ALL-TEST ERROR]:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /estimates/schedule-doc-ids — id-шники смет, у которых уже есть начатый календарный
+// план (хотя бы у одной работы проставлена дата начала). Нужно разделу «Календарное
+// планирование», чтобы отличать «Создать КП» (ещё не начато) от «Открыть КП» (уже есть).
+router.get('/schedule-doc-ids', async (req, res) => {
+    try {
+        // Календарный план хранится в отдельной таблице est_doc_schedules (не в est_doc_works) —
+        // одна строка на назначенную дату начала работы, doc_id ссылается на est_documents.
+        const { data, error } = await supabaseAdmin
+            .from('est_doc_schedules')
+            .select('doc_id');
+        if (error) throw error;
+        const docIds = Array.from(new Set((data || []).map(r => r.doc_id).filter(Boolean)));
+        res.json({ docIds });
+    } catch (err) {
+        console.error('[SCHEDULE DOC IDS ERROR]:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -1011,26 +1128,52 @@ router.post('/:docId/save', async (req, res) => {
         const existingResIds = (resources || []).filter(r => !r.id.startsWith('temp_')).map(r => r.id);
         const existingCoeffIds = (coefficients || []).filter(c => !c.id.startsWith('temp_')).map(c => c.id);
 
+        // Старые значения нормы/количества — чтобы после upsert'а залогировать в
+        // resource_quantity_history только то, что реально изменилось.
+        let prevResourceValues = {};
+        if (existingResIds.length > 0) {
+            const { data: prevResRows } = await supabaseAdmin
+                .from('est_doc_resources')
+                .select('id, norm, quantity')
+                .in('id', existingResIds);
+            (prevResRows || []).forEach(r => { prevResourceValues[r.id] = r; });
+        }
+
         if (existingWbsIds.length > 0) {
-            await supabaseAdmin.from('est_wbs').delete().eq('doc_id', docId).not('id', 'in', existingWbsIds);
+            await supabaseAdmin.from('est_wbs').delete().eq('doc_id', docId).not('id', 'in', `(${existingWbsIds.join(',')})`);
         } else {
             await supabaseAdmin.from('est_wbs').delete().eq('doc_id', docId);
         }
 
+        // Перед удалением работ узнаём, какие id реально пропадут — если у них были связи
+        // в КП (est_work_dependencies), связь-строки станут ссылаться на удалённую работу
+        // и её нужно тоже подчистить (саму связанную работу и её даты это не трогает —
+        // только убирает саму связь).
+        const { data: currentDbWorks } = await supabaseAdmin.from('est_doc_works').select('id').eq('doc_id', docId);
+        const currentDbWorkIds = (currentDbWorks || []).map(w => w.id);
+        const deletedWorkIds = existingWorkIds.length > 0
+            ? currentDbWorkIds.filter(id => !existingWorkIds.includes(id))
+            : currentDbWorkIds;
+
         if (existingWorkIds.length > 0) {
-            await supabaseAdmin.from('est_doc_works').delete().eq('doc_id', docId).not('id', 'in', existingWorkIds);
+            await supabaseAdmin.from('est_doc_works').delete().eq('doc_id', docId).not('id', 'in', `(${existingWorkIds.join(',')})`);
         } else {
             await supabaseAdmin.from('est_doc_works').delete().eq('doc_id', docId);
         }
 
+        if (deletedWorkIds.length > 0) {
+            const idsList = deletedWorkIds.join(',');
+            await supabaseAdmin.from('est_work_dependencies').delete().or(`predecessor_id.in.(${idsList}),successor_id.in.(${idsList})`);
+        }
+
         if (existingResIds.length > 0) {
-            await supabaseAdmin.from('est_doc_resources').delete().eq('doc_id', docId).not('id', 'in', existingResIds);
+            await supabaseAdmin.from('est_doc_resources').delete().eq('doc_id', docId).not('id', 'in', `(${existingResIds.join(',')})`);
         } else {
             await supabaseAdmin.from('est_doc_resources').delete().eq('doc_id', docId);
         }
 
         if (existingCoeffIds.length > 0) {
-            await supabaseAdmin.from('est_coefficients').delete().eq('doc_id', docId).not('id', 'in', existingCoeffIds);
+            await supabaseAdmin.from('est_coefficients').delete().eq('doc_id', docId).not('id', 'in', `(${existingCoeffIds.join(',')})`);
         } else {
             await supabaseAdmin.from('est_coefficients').delete().eq('doc_id', docId);
         }
@@ -1217,6 +1360,36 @@ router.post('/:docId/save', async (req, res) => {
         if (resourcesToUpsert.length > 0) {
             const { error: resErr } = await supabaseAdmin.from('est_doc_resources').upsert(resourcesToUpsert);
             if (resErr) throw resErr;
+
+            const quantityHistoryRows = resourcesToUpsert
+                .filter(r => prevResourceValues[r.id])
+                .map(r => {
+                    const prev = prevResourceValues[r.id];
+                    const oldNorm = prev.norm !== null && prev.norm !== undefined ? Number(prev.norm) : null;
+                    const newNorm = r.norm !== null && r.norm !== undefined ? Number(r.norm) : null;
+                    const oldQuantity = prev.quantity !== null && prev.quantity !== undefined ? Number(prev.quantity) : null;
+                    const newQuantity = r.quantity !== null && r.quantity !== undefined ? Number(r.quantity) : null;
+                    const normChanged = oldNorm !== newNorm && !(oldNorm === null && newNorm === null);
+                    const quantityChanged = oldQuantity !== newQuantity && !(oldQuantity === null && newQuantity === null);
+                    if (!normChanged && !quantityChanged) return null;
+                    return {
+                        doc_resource_id: r.id,
+                        resource_id: r.resource_id,
+                        region_id: finalRegionId || null,
+                        old_quantity: oldQuantity,
+                        new_quantity: newQuantity,
+                        old_norm: oldNorm,
+                        new_norm: newNorm,
+                        changed_by: req.user?.id || null,
+                        changed_at: new Date().toISOString()
+                    };
+                })
+                .filter(Boolean);
+
+            if (quantityHistoryRows.length > 0) {
+                const { error: histErr } = await supabaseAdmin.from('resource_quantity_history').insert(quantityHistoryRows);
+                if (histErr) console.error('[RESOURCE QUANTITY HISTORY LOG ERROR]:', histErr.message);
+            }
         }
 
         const coeffsToUpsert = (coefficients || []).map(coeff => {
@@ -1238,7 +1411,14 @@ router.post('/:docId/save', async (req, res) => {
         }
 
         await recalculateDocTotal(docId);
-        res.json({ success: true, message: 'Все изменения успешно сохранены' });
+        res.json({
+            success: true,
+            message: 'Все изменения успешно сохранены',
+            wbs: wbsToUpsert,
+            works: worksToUpsert,
+            resources: resourcesToUpsert,
+            coefficients: coeffsToUpsert
+        });
     } catch (err) {
         console.error('[BULK SAVE ERROR]:', err.message);
         res.status(500).json({ error: 'Ошибка сервера при массовом сохранении: ' + err.message });
@@ -1848,6 +2028,63 @@ function writeSchedulesStore(store) {
     }
 }
 
+// Есть ли у работы связь (зависимость) в КП, и с какой работой — используется в разделе
+// «Сметы» перед удалением работы, чтобы предупредить: связь потеряется, но дата/длительность
+// оставшейся связанной работы не изменятся (их значения не трогаем — удаляем только саму
+// связь-строку в est_work_dependencies, что и так происходит автоматически при сохранении
+// сметы без этой работы).
+router.get('/work-links/:workId', async (req, res) => {
+    try {
+        const { workId } = req.params;
+        const { data: deps, error: depsErr } = await supabaseAdmin
+            .from('est_work_dependencies')
+            .select('predecessor_id, successor_id')
+            .or(`predecessor_id.eq.${workId},successor_id.eq.${workId}`);
+        if (depsErr) throw depsErr;
+
+        if (!deps || deps.length === 0) {
+            return res.json({ linked: false, links: [] });
+        }
+
+        const otherIds = Array.from(new Set(deps.map(d => (d.predecessor_id === workId ? d.successor_id : d.predecessor_id))));
+        const { data: otherWorks } = await supabaseAdmin
+            .from('est_doc_works')
+            .select('id, work_id')
+            .in('id', otherIds);
+
+        const jobIds = Array.from(new Set((otherWorks || []).map(w => w.work_id).filter(Boolean)));
+        const { data: jobsList } = jobIds.length > 0 ? await supabaseAdmin.from('jobs').select('id, code').in('id', jobIds) : { data: [] };
+        const { data: jobsCasList } = jobIds.length > 0 ? await supabaseAdmin.from('jobs_cas').select('id, code').in('id', jobIds) : { data: [] };
+        const jobsMap = {};
+        (jobsList || []).forEach(j => { jobsMap[j.id] = j; });
+        (jobsCasList || []).forEach(j => { jobsMap[j.id] = j; });
+
+        // localization.object_id для jobs/jobs_cas — это id самой работы в справочнике,
+        // а не name_id (см. установленный ранее паттерн в /schedule/:docId ниже).
+        const { data: locs } = jobIds.length > 0 ? await supabaseAdmin
+            .from('localization')
+            .select('object_id, locale, name')
+            .in('object_name', ['jobs', 'jobs_cas'])
+            .in('object_id', jobIds) : { data: [] };
+        const locMap = {};
+        (locs || []).forEach(l => {
+            if (!locMap[l.object_id]) locMap[l.object_id] = {};
+            locMap[l.object_id][l.locale] = l.name;
+        });
+
+        const links = (otherWorks || []).map(w => {
+            const names = locMap[w.work_id] || {};
+            const name = names.ru || names.en || names.ka || names.az || (jobsMap[w.work_id]?.code) || 'Работа';
+            return { workId: w.id, name };
+        });
+
+        res.json({ linked: true, links });
+    } catch (err) {
+        console.error('[WORK LINKS CHECK ERROR]:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Получить данные календарного планирования для сметы
 router.get('/schedule/:docId', async (req, res) => {
     try {
@@ -1881,12 +2118,14 @@ router.get('/schedule/:docId', async (req, res) => {
         doc.is_readonly = await checkIfDocLocked(docId);
 
         // 2. Получаем данные проекта (включая start_date и end_date)
+        // ВАЖНО: doc.project_id — это текстовый код/название сметы (например, номер объекта),
+        // а не UUID проекта. Реальная ссылка на таблицу projects — doc.project_uuid.
         let project = null;
-        if (doc.project_id) {
+        if (doc.project_uuid) {
             const { data: p } = await supabaseAdmin
                 .from('projects')
                 .select('id, code, name, start_date, end_date, manager_id')
-                .eq('id', doc.project_id)
+                .eq('id', doc.project_uuid)
                 .single();
             project = p;
         }
@@ -2131,9 +2370,12 @@ router.get('/schedule/:docId', async (req, res) => {
             const names = workLocMap[w.work_id] || workLocMap[job.name_id] || {};
             const measureId = job.dic_measures?.id;
             const unitNames = measureLocMap[measureId] || {};
-            
+
+            // Код работы уже приходит отдельным полем `code` (своя колонка «КОД») — раньше он
+            // ещё и приклеивался в начало `name`, из-за чего в печатной форме КП и на диаграмме
+            // Ганта код показывался дважды подряд.
             const rawName = names[lang] || names.ru || names.en || names.ka || names.az || '';
-            const jobName = rawName ? `${job.code ? `${job.code} ` : ''}${rawName}`.trim() : (job.code ? `${job.code} Строительные работы` : 'Строительные работы');
+            const jobName = rawName || 'Строительные работы';
             const unitName = unitNames[lang] || unitNames.ru || unitNames.en || job.dic_measures?.code || 'ед.';
             const schedItem = docScheduleStore[w.id] || docScheduleStore[w.work_id] || {};
 
@@ -2496,7 +2738,7 @@ function calculateCriticalPath(worksList, dependencies, calculatedSchedules, pro
 
 router.post('/schedule-save', async (req, res) => {
     try {
-        const { doc_id, schedules, dependencies = [] } = req.body;
+        const { doc_id, schedules, dependencies = [], wbs_periods = {} } = req.body;
         if (!doc_id || !schedules) {
             return res.status(400).json({ error: 'Обязательные параметры: doc_id, schedules' });
         }
@@ -2508,14 +2750,18 @@ router.post('/schedule-save', async (req, res) => {
         const isValidUuid = (id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
         // 1. Получаем все работы сметы из базы данных для проверки существования
+        // (wbs_id нужен ниже — чтобы проверить, что работы укладываются в период своего
+        // конструктива, см. "8b. Период конструктива" после расчёта итоговых дат).
         const { data: dbWorks, error: dbWorksErr } = await supabaseAdmin
             .from('est_doc_works')
-            .select('id')
+            .select('id, wbs_id')
             .eq('doc_id', doc_id)
             .eq('is_excluded', false);
 
         if (dbWorksErr) throw dbWorksErr;
         const validWorkIds = new Set((dbWorks || []).map(w => w.id));
+        const workIdToWbsId = {};
+        (dbWorks || []).forEach(w => { workIdToWbsId[w.id] = w.wbs_id; });
 
         // 2. Валидация зависимостей
         for (const dep of dependencies) {
@@ -2547,10 +2793,12 @@ router.post('/schedule-save', async (req, res) => {
         }
 
         // 3. Получение даты начала проекта
+        // ВАЖНО: est_documents.project_id — текстовый код сметы, а не UUID проекта.
+        // Реальная ссылка на таблицу projects — project_uuid.
         let projectStartDate = new Date().toISOString().split('T')[0];
-        const { data: doc } = await supabaseAdmin.from('est_documents').select('project_id').eq('id', doc_id).single();
-        if (doc && doc.project_id) {
-            const { data: proj } = await supabaseAdmin.from('projects').select('start_date').eq('id', doc.project_id).single();
+        const { data: doc } = await supabaseAdmin.from('est_documents').select('project_uuid').eq('id', doc_id).single();
+        if (doc && doc.project_uuid) {
+            const { data: proj } = await supabaseAdmin.from('projects').select('start_date').eq('id', doc.project_uuid).single();
             if (proj && proj.start_date) {
                 projectStartDate = new Date(proj.start_date).toISOString().split('T')[0];
             }
@@ -2558,40 +2806,58 @@ router.post('/schedule-save', async (req, res) => {
 
         // 4. Формирование базовых (пользовательских) дат и длительностей с валидацией
         let projectEndDate = null;
-        if (doc && doc.project_id) {
-            const { data: proj } = await supabaseAdmin.from('projects').select('end_date').eq('id', doc.project_id).single();
+        if (doc && doc.project_uuid) {
+            const { data: proj } = await supabaseAdmin.from('projects').select('end_date').eq('id', doc.project_uuid).single();
             if (proj && proj.end_date) {
                 projectEndDate = new Date(proj.end_date).toISOString().split('T')[0];
             }
         }
 
+        // Раньше любая проблема у ОДНОЙ работы (пустая дата, дата за пределами календаря
+        // проекта и т.п.) валила запрос целиком — 400 на весь КП, и это плохое значение
+        // застревало в состоянии фронтенда навсегда: следующее автосохранение снова слало
+        // ту же самую работу и снова падало с той же ошибкой, КП переставал сохраняться
+        // вообще. Теперь проблемная работа просто пропускается (её дата в базе остаётся
+        // прежней — новую мы не пишем) и собирается в скипWarnings, а все остальные работы
+        // сохраняются как обычно. Само предупреждение конкретно по этой работе пользователь
+        // и так уже видит в таблице (подсветка/бейдж на клиенте).
         const worksList = [];
+        const skippedWorkIds = new Set();
+        const skipWarnings = [];
         for (const workId of allWorkIdsArray) {
             const val = schedules[workId];
             if (!val) {
-                return res.status(400).json({ error: 'Расписание для всех работ должно быть предоставлено' });
+                skippedWorkIds.add(workId);
+                continue;
             }
 
             const { start_date, duration_days } = val;
 
             if (!start_date || String(start_date).trim() === '' || duration_days === undefined || duration_days === null || String(duration_days).trim() === '') {
-                return res.status(400).json({ error: 'Заполните обязательные поля периода выполнения' });
+                skippedWorkIds.add(workId);
+                continue;
             }
 
             const startD = new Date(start_date);
             if (isNaN(startD.getTime())) {
-                return res.status(400).json({ error: 'Некорректная дата начала работы' });
+                skippedWorkIds.add(workId);
+                skipWarnings.push('Пропущена работа с некорректной датой начала.');
+                continue;
             }
 
             const days = parseInt(duration_days, 10);
             if (isNaN(days) || days <= 0) {
-                return res.status(400).json({ error: 'Продолжительность должна быть больше 0 дней.' });
+                skippedWorkIds.add(workId);
+                skipWarnings.push('Пропущена работа с некорректной продолжительностью.');
+                continue;
             }
 
             // Валидация с началом проекта
             const projStartD = new Date(projectStartDate);
             if (!isNaN(projStartD.getTime()) && startD < projStartD) {
-                return res.status(400).json({ error: `Дата начала работы не может быть меньше даты начала проекта (${projectStartDate})` });
+                skippedWorkIds.add(workId);
+                skipWarnings.push(`Пропущена работа: дата начала раньше начала проекта (${projectStartDate}).`);
+                continue;
             }
 
             // Валидация с окончанием проекта
@@ -2600,7 +2866,9 @@ router.post('/schedule-save', async (req, res) => {
                 const endD = new Date(startD);
                 endD.setDate(endD.getDate() + days - 1);
                 if (!isNaN(projEndD.getTime()) && endD > projEndD) {
-                    return res.status(400).json({ error: 'Выбранный период выходит за пределы календаря проекта.' });
+                    skippedWorkIds.add(workId);
+                    skipWarnings.push('Пропущена работа: период выходит за пределы календаря проекта.');
+                    continue;
                 }
             }
 
@@ -2619,11 +2887,110 @@ router.post('/schedule-save', async (req, res) => {
             });
         }
 
+        // Связи, где хоть одна из сторон пропущена, для ЭТОГО сохранения не учитываем в
+        // расчётах (пересчёт дат/критпуть) — у пропущенной работы просто нет валидных дат,
+        // считать по ней нечего. Сами строки связей в базе не трогаем здесь отдельно — при
+        // сохранении блок ниже (п.8) всё равно пишет только то, что пришло в dependencies.
+        const effectiveDependencies = skippedWorkIds.size > 0
+            ? dependencies.filter(dep => !skippedWorkIds.has(dep.predecessor_id) && !skippedWorkIds.has(dep.successor_id))
+            : dependencies;
+
         // 5. Пересчет дат на основе зависимостей
-        const calculatedSchedules = recalculateSchedules(worksList, dependencies, projectStartDate);
+        const calculatedSchedules = recalculateSchedules(worksList, effectiveDependencies, projectStartDate);
 
         // 6. Расчет критического пути
-        const criticalPath = calculateCriticalPath(worksList, dependencies, calculatedSchedules, projectStartDate);
+        const criticalPath = calculateCriticalPath(worksList, effectiveDependencies, calculatedSchedules, projectStartDate);
+
+        // 6b. Период конструктива (US: "Период на уровне конструктива") — дата+длительность
+        // самого узла всегда сохраняется (это просто значение поля, блокировать его сохранение
+        // нельзя). А вот попадают ли работы внутри в этот период — это отдельная, более мягкая
+        // проверка: раньше она блокировала сохранение ВСЕЙ сметы целиком при любом несовпадении,
+        // из-за чего КП переставал сохраняться вообще (не только период, а вообще всё). Теперь
+        // это предупреждение (warnings в ответе), а сама блокировка сделана точечно — при
+        // создании/редактировании связи (см. /schedule-save логику ниже не трогаем, ограничение
+        // ставится на клиенте в handleAddDirectDependency).
+        const wbsPeriodWarnings = [];
+        const wbsPeriodEntries = Object.entries(wbs_periods).filter(([, p]) => p && p.start_date && p.duration_days);
+        if (wbsPeriodEntries.length > 0) {
+            const { data: allWbsNodes, error: wbsFetchErr } = await supabaseAdmin
+                .from('est_wbs')
+                .select('id, parent_id, name')
+                .eq('doc_id', doc_id);
+            if (wbsFetchErr) throw wbsFetchErr;
+
+            const childrenByParent = {};
+            (allWbsNodes || []).forEach(n => {
+                if (!n.parent_id) return;
+                if (!childrenByParent[n.parent_id]) childrenByParent[n.parent_id] = [];
+                childrenByParent[n.parent_id].push(n.id);
+            });
+            const wbsNameById = {};
+            (allWbsNodes || []).forEach(n => { wbsNameById[n.id] = n.name; });
+
+            const getDescendantWbsIds = (rootId) => {
+                const result = new Set([rootId]);
+                const queue = [rootId];
+                while (queue.length > 0) {
+                    const current = queue.pop();
+                    (childrenByParent[current] || []).forEach(childId => {
+                        if (!result.has(childId)) {
+                            result.add(childId);
+                            queue.push(childId);
+                        }
+                    });
+                }
+                return result;
+            };
+
+            for (const [wbsId, period] of wbsPeriodEntries) {
+                const periodStartD = new Date(period.start_date);
+                if (isNaN(periodStartD.getTime())) {
+                    return res.status(400).json({ error: `Некорректная дата начала периода конструктива «${wbsNameById[wbsId] || wbsId}»` });
+                }
+                const periodDays = parseInt(period.duration_days, 10);
+                if (isNaN(periodDays) || periodDays <= 0) {
+                    return res.status(400).json({ error: `Некорректная длительность периода конструктива «${wbsNameById[wbsId] || wbsId}»` });
+                }
+                const periodEndD = new Date(periodStartD);
+                periodEndD.setDate(periodEndD.getDate() + periodDays - 1);
+
+                const descendantIds = getDescendantWbsIds(wbsId);
+                const childWorkIds = Object.keys(workIdToWbsId).filter(wid => descendantIds.has(workIdToWbsId[wid]));
+
+                for (const wid of childWorkIds) {
+                    const calc = calculatedSchedules[wid];
+                    if (!calc || !calc.start_date) continue;
+                    const workStartD = new Date(calc.start_date);
+                    const workEndD = new Date(workStartD);
+                    workEndD.setDate(workEndD.getDate() + (parseInt(calc.duration_days, 10) || 1) - 1);
+
+                    if (workStartD < periodStartD || workEndD > periodEndD) {
+                        const workName = (worksList.find(w => w.id === wid) || {}).name;
+                        wbsPeriodWarnings.push(
+                            `Работа${workName ? ` «${workName}»` : ''} выходит за период конструктива «${wbsNameById[wbsId] || ''}» ` +
+                            `(${period.start_date} — ${periodEndD.toISOString().split('T')[0]}).`
+                        );
+                    }
+                }
+            }
+
+            // Период сохраняем в любом случае — несовпадение с датами работ это предупреждение,
+            // не повод не дать заполнить/поправить сам период конструктива.
+            // ВАЖНО: тут именно UPDATE, а не upsert — Postgres проверяет NOT NULL constraints
+            // (name, type, doc_id...) у INSERT-варианта строки ДАЖЕ когда конфликт по id
+            // приведёт к обычному UPDATE. Раз узел уже существует (мы его только что читали
+            // из этой же таблицы), апдейт безопасен и не требует остальных полей.
+            for (const [wbsId, period] of wbsPeriodEntries) {
+                const { error: wbsPeriodErr } = await supabaseAdmin
+                    .from('est_wbs')
+                    .update({
+                        period_start_date: period.start_date,
+                        period_duration_days: parseInt(period.duration_days, 10)
+                    })
+                    .eq('id', wbsId);
+                if (wbsPeriodErr) throw wbsPeriodErr;
+            }
+        }
 
         // 7. Сохранение расписания в est_doc_schedules
         const upsertRows = worksList.map(w => {
@@ -2655,7 +3022,18 @@ router.post('/schedule-save', async (req, res) => {
 
         // Вставляем новые связи
         if (dependencies.length > 0) {
-            const depRows = dependencies.map(dep => ({
+            // В базе на (predecessor_id, successor_id) стоит UNIQUE-ограничение — между двумя
+            // работами может быть только ОДНА связь, независимо от типа (FS/SS/FF/SF). Если в
+            // пришедшем массиве такая пара встретилась дважды (например, из-за гонки при быстром
+            // двойном клике на клиенте — react ещё не успел применить первое добавление, и обе
+            // попытки прочитали одно и то же старое состояние), insert падает с "duplicate key
+            // value violates unique constraint". Схлопываем дубли здесь — оставляем последнюю
+            // версию пары, чтобы сохранение не падало целиком из-за одной гонки на клиенте.
+            const depMap = new Map();
+            dependencies.forEach(dep => {
+                depMap.set(`${dep.predecessor_id}::${dep.successor_id}`, dep);
+            });
+            const depRows = Array.from(depMap.values()).map(dep => ({
                 doc_id: doc_id,
                 predecessor_id: dep.predecessor_id,
                 successor_id: dep.successor_id,
@@ -2759,7 +3137,8 @@ router.post('/schedule-save', async (req, res) => {
             success: true,
             message: 'Календарный план и зависимости успешно сохранены',
             schedules: calculatedSchedules,
-            criticalPath: criticalPath
+            criticalPath: criticalPath,
+            warnings: [...skipWarnings, ...wbsPeriodWarnings]
         });
     } catch (err) {
         console.error('[SCHEDULE SAVE ERROR]:', err);
@@ -3020,8 +3399,9 @@ router.get('/objects/:objectId/general-schedule', async (req, res) => {
             const unitNames = measureLocMap[measureId] || {};
 
             const rawName = names[lang] || names.ru || names.en || names.ka || names.az || '';
-            // Работы отображаются без префикса сметы — иерархия WBS уже показывает принадлежность
-            const jobName = rawName ? `${job.code ? `${job.code} ` : ''}${rawName}`.trim() : `${job.code ? `${job.code} ` : ''}Строительные работы`;
+            // Код работы уже приходит отдельным полем `code` — не дублируем его в `name`
+            // (раньше склеивались вместе, и в печатной форме/на диаграмме Ганта код был виден дважды).
+            const jobName = rawName || 'Строительные работы';
             const unitName = unitNames[lang] || unitNames.ru || unitNames.en || job.dic_measures?.code || 'ед.';
             const schedItem = docScheduleStore[w.id] || docScheduleStore[w.work_id] || {};
 
@@ -3105,7 +3485,7 @@ router.post('/general-schedule-save', async (req, res) => {
         // 1. Получаем все сметы данного объекта
         const { data: docs, error: docsErr } = await supabaseAdmin
             .from('est_documents')
-            .select('id, project_id')
+            .select('id, project_uuid')
             .eq('object_id', object_id);
 
         if (docsErr) throw docsErr;
@@ -3157,10 +3537,11 @@ router.post('/general-schedule-save', async (req, res) => {
         }
 
         // 4. Получение даты начала проекта
+        // ВАЖНО: project_id на est_documents — текстовый код сметы, а не UUID проекта — реальная ссылка на projects это project_uuid.
         let projectStartDate = new Date().toISOString().split('T')[0];
         let projectEndDate = null;
-        if (docs[0].project_id) {
-            const { data: proj } = await supabaseAdmin.from('projects').select('start_date, end_date').eq('id', docs[0].project_id).single();
+        if (docs[0].project_uuid) {
+            const { data: proj } = await supabaseAdmin.from('projects').select('start_date, end_date').eq('id', docs[0].project_uuid).single();
             if (proj && proj.start_date) {
                 projectStartDate = new Date(proj.start_date).toISOString().split('T')[0];
             }
@@ -3257,9 +3638,14 @@ router.post('/general-schedule-save', async (req, res) => {
                 .eq('doc_id', docId);
             if (delErr) throw delErr;
 
-            // Вставляем новые
+            // Вставляем новые — схлопываем дубли по (predecessor_id, successor_id), см.
+            // подробный комментарий у аналогичного места в /schedule-save.
             if (docDeps.length > 0) {
-                const depRows = docDeps.map(dep => ({
+                const docDepMap = new Map();
+                docDeps.forEach(dep => {
+                    docDepMap.set(`${dep.predecessor_id}::${dep.successor_id}`, dep);
+                });
+                const depRows = Array.from(docDepMap.values()).map(dep => ({
                     doc_id: docId,
                     predecessor_id: dep.predecessor_id,
                     successor_id: dep.successor_id,
@@ -3558,7 +3944,8 @@ router.get('/gpr-data/:objectId', async (req, res) => {
             const measureId = job.dic_measures?.id;
             const unitNames = measureLocMap[measureId] || {};
             const rawName = names[lang] || names.ru || names.en || '';
-            const jobName = rawName ? `${job.code ? `${job.code} ` : ''}${rawName}`.trim() : (job.code ? `${job.code} Строительные работы` : 'Строительные работы');
+            // Код работы уже приходит отдельным полем `code` — не дублируем его в `name`.
+            const jobName = rawName || 'Строительные работы';
             const unitName = unitNames[lang] || unitNames.ru || job.dic_measures?.code || 'ед.';
             
             const schedItem = docScheduleStore[w.id] || docScheduleStore[w.work_id] || {};
@@ -4374,6 +4761,9 @@ router.post('/:docId/approve-plan', async (req, res) => {
             return res.status(400).json({ error: 'Утвердить можно только смету, находящуюся на утверждении' });
         }
 
+        // Сохраняем изменения объемов и ресурсов, если они были переданы финансовым директором
+        await saveApproverCorrections(docId, req.body || {});
+
         const nowStr = new Date().toISOString();
 
         // Обновляем текущую смету на planned_approved
@@ -4457,6 +4847,9 @@ router.post('/:docId/reject-plan', async (req, res) => {
         if (est.status !== 'planned_review') {
             return res.status(400).json({ error: 'Отклонить можно только смету, находящуюся на утверждении' });
         }
+
+        // Сохраняем изменения объемов и ресурсов, если они были переданы финансовым директором
+        await saveApproverCorrections(docId, req.body || {});
 
         const nowStr = new Date().toISOString();
 

@@ -168,9 +168,19 @@ router.post('/contractors', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // GET /api/contracts/distribution-summary?project_id=&object_id=&doc_id=
+// Проверяет, попадает ли договор в фильтр по подрядчику/периоду (АС-5: фильтрация отчёта
+// по проекту, объекту, подрядчику, периоду — первые два фильтруются на уровне смет выше).
+function contractMatchesFilters(contract, contractorId, dateFrom, dateTo) {
+    if (!contract) return false;
+    if (contractorId && contract.contractor_id !== contractorId) return false;
+    if (dateFrom && contract.date_start && contract.date_start < dateFrom) return false;
+    if (dateTo && contract.date_start && contract.date_start > dateTo) return false;
+    return true;
+}
+
 router.get('/distribution-summary', async (req, res) => {
     try {
-        const { project_id, object_id, doc_id } = req.query;
+        const { project_id, object_id, doc_id, contractor_id, date_from, date_to } = req.query;
 
         // 1. Находим сметы по проекту/объекту
         let docQuery = supabaseAdmin
@@ -210,13 +220,13 @@ router.get('/distribution-summary', async (req, res) => {
                 .from('contract_assignments')
                 .select(`
                     id, est_doc_work_id, assigned_quantity, unit_price, total_price, status,
-                    contracts:contract_id (id, contract_number, status, contractors:contractor_id (company_name))
+                    contracts:contract_id (id, contract_number, status, contractor_id, date_start, date_end, contractors:contractor_id (company_name))
                 `)
                 .in('est_doc_work_id', workIds)
                 .eq('assignment_type', 'WORK')
                 .neq('status', 'CANCELLED');
 
-            for (const a of (assignments || [])) {
+            for (const a of (assignments || []).filter(a => contractMatchesFilters(a.contracts, contractor_id, date_from, date_to))) {
                 const wid = a.est_doc_work_id;
                 if (!assignedMap[wid]) assignedMap[wid] = 0;
                 assignedMap[wid] += Number(a.assigned_quantity || 0);
@@ -251,13 +261,13 @@ router.get('/distribution-summary', async (req, res) => {
                 .from('contract_assignments')
                 .select(`
                     id, est_doc_resource_id, assigned_quantity, unit_price, status,
-                    contracts:contract_id (id, contract_number, status, contractors:contractor_id (company_name))
+                    contracts:contract_id (id, contract_number, status, contractor_id, date_start, date_end, contractors:contractor_id (company_name))
                 `)
                 .in('est_doc_resource_id', resourceIds)
                 .eq('assignment_type', 'RESOURCE')
                 .neq('status', 'CANCELLED');
 
-            for (const a of (resAssignments || [])) {
+            for (const a of (resAssignments || []).filter(a => contractMatchesFilters(a.contracts, contractor_id, date_from, date_to))) {
                 const rid = a.est_doc_resource_id;
                 if (!resAssignedMap[rid]) resAssignedMap[rid] = 0;
                 resAssignedMap[rid] += Number(a.assigned_quantity || 0);
@@ -387,10 +397,45 @@ router.get('/works-for-assignment', async (req, res) => {
             }
         }
 
+        // Разбивка цены работы на "с материалами" / "без материалов" — нужна, чтобы при
+        // назначении работы договору цена за единицу считалась автоматически в зависимости
+        // от чекбокса "С материалами" (см. contract_assignments.with_materials): если без
+        // материалов — в стоимость входят только трудовые и машины/механизмы.
+        let materialSumByWork = {};
+        let laborMachineSumByWork = {};
+        if (workIds.length > 0) {
+            const { data: workResources } = await supabaseAdmin
+                .from('est_doc_resources')
+                .select('work_id, resource_id, amount')
+                .in('work_id', workIds)
+                .eq('is_excluded', false);
+
+            const resourceIds = Array.from(new Set((workResources || []).map(r => r.resource_id).filter(Boolean)));
+            const resourceInfo = await getResourceCatalogInfo(resourceIds);
+
+            (workResources || []).forEach(r => {
+                const category = RESOURCE_TYPE_CODE_TO_CATEGORY[resourceInfo[r.resource_id]?.type_code];
+                const amount = Number(r.amount || 0);
+                if (category === 'material') {
+                    materialSumByWork[r.work_id] = (materialSumByWork[r.work_id] || 0) + amount;
+                } else {
+                    // labor/machine/неизвестная категория — считаем "не материалом" по умолчанию,
+                    // чтобы неучтённый ресурс не потерялся молча ни в одной из двух цен.
+                    laborMachineSumByWork[r.work_id] = (laborMachineSumByWork[r.work_id] || 0) + amount;
+                }
+            });
+        }
+
         const result = (works || []).map(w => {
             const totalQty = Number(w.volume || 0);
             const assignedQty = assignedMap[w.id] || 0;
             const remaining = Math.max(0, totalQty - assignedQty);
+            const laborMachineSum = laborMachineSumByWork[w.id] || 0;
+            const materialSum = materialSumByWork[w.id] || 0;
+            // Цена за единицу объёма работы — полная (с материалами) и без материалов.
+            // Делим на объём по смете (не на назначенный), т.к. это расценка "за единицу".
+            const priceWithMaterials = totalQty > 0 ? (laborMachineSum + materialSum) / totalQty : Number(w.price || 0);
+            const priceWithoutMaterials = totalQty > 0 ? laborMachineSum / totalQty : 0;
             return {
                 id: w.id,
                 doc_id: w.doc_id,
@@ -401,6 +446,8 @@ router.get('/works-for-assignment', async (req, res) => {
                 remaining_quantity: remaining,
                 assigned_percent: totalQty > 0 ? Math.round((assignedQty / totalQty) * 100) : 0,
                 price: Number(w.price || 0),
+                price_with_materials: priceWithMaterials,
+                price_without_materials: priceWithoutMaterials,
                 amount: Number(w.amount || 0),
             };
         });
@@ -790,6 +837,69 @@ router.post('/:id/assignments', async (req, res) => {
             .single();
 
         if (!contract) return res.status(404).json({ error: 'Договор не найден' });
+
+        // Целостность данных: сумма закреплённых по всем договорам объёмов на одну работу/ресурс
+        // не должна превышать общий объём по смете — проверяем на сервере, т.к. фронтенд можно обойти.
+        const workIds = Array.from(new Set(assignments.map(a => a.est_doc_work_id).filter(Boolean)));
+        const resourceIds = Array.from(new Set(assignments.map(a => a.est_doc_resource_id).filter(Boolean)));
+
+        const [existingWorkAssignments, existingResAssignments, workRows, resRows] = await Promise.all([
+            workIds.length > 0
+                ? supabaseAdmin.from('contract_assignments').select('est_doc_work_id, assigned_quantity').in('est_doc_work_id', workIds).eq('assignment_type', 'WORK').neq('status', 'CANCELLED')
+                : Promise.resolve({ data: [] }),
+            resourceIds.length > 0
+                ? supabaseAdmin.from('contract_assignments').select('est_doc_resource_id, assigned_quantity').in('est_doc_resource_id', resourceIds).eq('assignment_type', 'RESOURCE').neq('status', 'CANCELLED')
+                : Promise.resolve({ data: [] }),
+            workIds.length > 0
+                ? supabaseAdmin.from('est_doc_works').select('id, volume').in('id', workIds)
+                : Promise.resolve({ data: [] }),
+            resourceIds.length > 0
+                ? supabaseAdmin.from('est_doc_resources').select('id, quantity').in('id', resourceIds)
+                : Promise.resolve({ data: [] })
+        ]);
+
+        const alreadyAssignedByWork = {};
+        (existingWorkAssignments.data || []).forEach(a => {
+            alreadyAssignedByWork[a.est_doc_work_id] = (alreadyAssignedByWork[a.est_doc_work_id] || 0) + Number(a.assigned_quantity || 0);
+        });
+        const alreadyAssignedByResource = {};
+        (existingResAssignments.data || []).forEach(a => {
+            alreadyAssignedByResource[a.est_doc_resource_id] = (alreadyAssignedByResource[a.est_doc_resource_id] || 0) + Number(a.assigned_quantity || 0);
+        });
+        const totalByWork = {};
+        (workRows.data || []).forEach(w => { totalByWork[w.id] = Number(w.volume || 0); });
+        const totalByResource = {};
+        (resRows.data || []).forEach(r => { totalByResource[r.id] = Number(r.quantity || 0); });
+
+        // Новые назначения в этом же батче тоже накапливаются (одна работа может встретиться
+        // несколько раз, если пользователь распределяет её сразу на несколько договоров за раз).
+        const newlyAddedByWork = {};
+        const newlyAddedByResource = {};
+        for (const a of assignments) {
+            const qty = Number(a.assigned_quantity || 0);
+            if (a.est_doc_work_id) {
+                const total = totalByWork[a.est_doc_work_id] ?? null;
+                const already = (alreadyAssignedByWork[a.est_doc_work_id] || 0) + (newlyAddedByWork[a.est_doc_work_id] || 0);
+                if (total != null) {
+                    const remaining = Math.max(0, total - already);
+                    if (qty > remaining + 1e-9) {
+                        return res.status(400).json({ error: `Объём "${a.work_name || 'работы'}" (${qty}) превышает доступный остаток (${remaining})` });
+                    }
+                }
+                newlyAddedByWork[a.est_doc_work_id] = (newlyAddedByWork[a.est_doc_work_id] || 0) + qty;
+            }
+            if (a.est_doc_resource_id) {
+                const total = totalByResource[a.est_doc_resource_id] ?? null;
+                const already = (alreadyAssignedByResource[a.est_doc_resource_id] || 0) + (newlyAddedByResource[a.est_doc_resource_id] || 0);
+                if (total != null) {
+                    const remaining = Math.max(0, total - already);
+                    if (qty > remaining + 1e-9) {
+                        return res.status(400).json({ error: `Объём "${a.resource_name || 'ресурса'}" (${qty}) превышает доступный остаток (${remaining})` });
+                    }
+                }
+                newlyAddedByResource[a.est_doc_resource_id] = (newlyAddedByResource[a.est_doc_resource_id] || 0) + qty;
+            }
+        }
 
         const toInsert = assignments.map(a => ({
             contract_id: id,

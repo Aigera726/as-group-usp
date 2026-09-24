@@ -38,6 +38,50 @@ const formatDisplayDate = (dateStr) => {
   return `${day}.${month}.${year}`;
 };
 
+// Количество людей на работу — вычисляемое значение (сумма трудовых ресурсов), может
+// приходить с длинным хвостом после запятой; округляем до 2 знаков для отображения,
+// но не дописываем незначащие нули (5 вместо 5.00, 5.5 вместо 5.50).
+const formatLaborCount = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return n === 0 ? '0' : String(value ?? '');
+  return String(Math.round(n * 100) / 100);
+};
+
+// SVG-текст не переносится сам — раньше длинные названия работ просто обрезались
+// многоточием после ~48 символов, и значимая часть названия терялась. Вместо этого
+// переносим по словам на до `maxLines` строк, и только если текст не влез даже так —
+// обрезаем именно последнюю строку с многоточием.
+function wrapGanttLabel(name, maxCharsPerLine = 42, maxLines = 2) {
+  const words = (name || '—').split(' ');
+  const allLines = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxCharsPerLine && current) {
+      allLines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) allLines.push(current);
+
+  if (allLines.length <= maxLines) return allLines;
+
+  const shown = allLines.slice(0, maxLines);
+  let last = shown[maxLines - 1];
+  if (last.length > maxCharsPerLine - 1) last = last.slice(0, maxCharsPerLine - 1);
+  shown[maxLines - 1] = last + '…';
+  return shown;
+}
+
+function truncateGanttBarLabel(name, maxChars) {
+  const s = name || '';
+  if (s.length <= maxChars) return s;
+  if (maxChars <= 1) return '';
+  return s.slice(0, maxChars - 1) + '…';
+}
+
 const getGanttLinkPath = (x1, y1, x2, y2, type) => {
   if (type === 'FS') {
     if (x2 >= x1 + 10) {
@@ -310,6 +354,11 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
 
   const [selectedWorkId, setSelectedWorkId] = useState(null);
   const [linkingSource, setLinkingSource] = useState(null); // { workId, edgeType: 'start'|'finish' }
+  // Точки начала/конца работы на Гантте нужны только чтобы кликом создать связь — но когда их
+  // видно у КАЖДОЙ работы сразу, диаграмма превращается в кашу из точек и пунктиров, а сама
+  // стрелка связи теряется на их фоне. Показываем точки только при наведении на конкретную
+  // работу (или пока активно создание связи — тогда нужны все, чтобы было куда кликнуть).
+  const [hoveredGanttWorkId, setHoveredGanttWorkId] = useState(null);
   const [showCreateLinkModal, setShowCreateLinkModal] = useState(false);
   const [modalPredecessorId, setModalPredecessorId] = useState('');
   const [modalSuccessorId, setModalSuccessorId] = useState('');
@@ -509,7 +558,63 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
     }
   };
 
+  // Ищет ближайший узел-конструктив (вверх по дереву WBS от work.wbs_id), у которого задан
+  // период — работа обязана укладываться именно в него. Если ни на одном уровне периода нет,
+  // возвращает null (ограничений нет).
+  const getConstructPeriodForWork = (workId) => {
+    const work = worksSchedule[workId];
+    if (!work) return null;
+    let node = wbsList.find(n => n.id === work.wbs_id);
+    while (node) {
+      if (node.type === 'construct' && node.period_start_date && node.period_duration_days) {
+        return {
+          start_date: node.period_start_date,
+          duration_days: parseInt(node.period_duration_days, 10) || 0,
+          constructName: node.name
+        };
+      }
+      node = node.parent_id ? wbsList.find(n => n.id === node.parent_id) : null;
+    }
+    return null;
+  };
+
+  // Проверяет, что итоговые (после пересчёта связей) даты работы укладываются в период её
+  // конструктива. При нарушении возвращает готовое сообщение об ошибке (локализовано на 4 языка
+  // по lang), иначе null.
+  const validateWorkAgainstConstructPeriod = (workId, scheduleState) => {
+    const period = getConstructPeriodForWork(workId);
+    if (!period) return null;
+    const work = scheduleState[workId];
+    if (!work || !work.start_date) return null;
+
+    const periodStart = parseDateString(period.start_date);
+    const periodEnd = new Date(periodStart);
+    periodEnd.setDate(periodEnd.getDate() + period.duration_days - 1);
+    const workStart = parseDateString(work.start_date);
+    const workEndStr = calculateEndDate(work.start_date, work.duration_days);
+    const workEnd = parseDateString(workEndStr);
+
+    if (!workStart || !workEnd || workStart < periodStart || workEnd > periodEnd) {
+      const periodEndStr = formatDateForInput(periodEnd);
+      const msg = lang === 'en'
+        ? `Work "${work.name}" start date or duration doesn't fit the construct period "${period.constructName}" (${period.start_date} — ${periodEndStr}). Adjust the dates first.`
+        : lang === 'ka'
+        ? `სამუშაოს "${work.name}" დაწყების თარიღი ან ხანგრძლივობა არ ჯდება კონსტრუქტივის "${period.constructName}" პერიოდში (${period.start_date} — ${periodEndStr}). ჯერ დაარეგულირეთ თარიღები.`
+        : lang === 'az'
+        ? `"${work.name}" işinin başlama tarixi və ya müddəti "${period.constructName}" konstruktivinin dövrünə (${period.start_date} — ${periodEndStr}) uyğun gəlmir. Əvvəlcə tarixləri düzəldin.`
+        : `Дата начала или длительность работы «${work.name}» не входят в период конструктива «${period.constructName}» (${period.start_date} — ${periodEndStr}). Сначала скорректируйте даты.`;
+      return msg;
+    }
+    return null;
+  };
+
   const handleAddDirectDependency = (predId, succId, type = 'FS', lag = 0) => {
+    // Финальная защита от гонки (см. handleDotClick) — даже если сюда попали в обход
+    // проверки на точках, пока предыдущее сохранение не завершилось, новую связь не создаём.
+    if (autoSaveStatus === 'pending' || autoSaveStatus === 'saving') {
+      setErrorToast(t.cpWaitForSave || 'Дождитесь сохранения предыдущего изменения и попробуйте снова.');
+      return false;
+    }
     if (predId === succId) {
       setErrorToast("Работа не может зависеть сама от себя");
       return false;
@@ -533,11 +638,20 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
     };
 
     const nextDeps = [...dependencies, newDep];
-    setDependencies(nextDeps);
-    setIsDirty(true);
 
     try {
       const nextState = clientRecalculateSchedules(worksSchedule, nextDeps, projectStartDate);
+
+      // Связь пересчитывает дату последующей работы — если результат не помещается в период
+      // её конструктива, связь не создаём вообще (ни в состоянии, ни на сервере).
+      const periodError = validateWorkAgainstConstructPeriod(succId, nextState);
+      if (periodError) {
+        setErrorToast(periodError);
+        return false;
+      }
+
+      setDependencies(nextDeps);
+      setIsDirty(true);
       setWorksSchedule(nextState);
       triggerAutoSave(nextState, nextDeps);
       setSuccessToast("Связь успешно добавлена.");
@@ -598,6 +712,14 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
 
   const handleDotClick = (workId, edgeType, e) => {
     e.stopPropagation();
+    // Пока идёт сохранение предыдущего изменения (таймер автосохранения ещё не сработал,
+    // или запрос уже в полёте) — не даём начинать/завершать новую связь. Иначе может
+    // случиться гонка: второй клик читает то же старое состояние, что и первый, и в базу
+    // улетает одна и та же пара связи дважды (см. "duplicate key... est_work_dependencies_unique").
+    if (autoSaveStatus === 'pending' || autoSaveStatus === 'saving') {
+      setErrorToast(t.cpWaitForSave || 'Дождитесь сохранения предыдущего изменения и попробуйте снова.');
+      return;
+    }
     if (linkingSource) {
       handleSelectTarget(workId, edgeType);
     } else {
@@ -698,7 +820,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
   };
 
   // Авто-сохранение: выполняется через 1.5 сек после последнего изменения
-  const triggerAutoSave = useCallback((currentSchedule, currentDeps = dependencies) => {
+  const triggerAutoSave = useCallback((currentSchedule, currentDeps = dependencies, currentWbsList = wbsList) => {
     if (autoSaveTimerRef.current) {
       clearTimeout(autoSaveTimerRef.current);
     }
@@ -729,10 +851,21 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
           };
         });
 
+        const wbsPeriods = {};
+        currentWbsList.forEach(node => {
+          if (node.type === 'construct' && node.period_start_date && node.period_duration_days) {
+            wbsPeriods[node.id] = {
+              start_date: node.period_start_date,
+              duration_days: parseInt(node.period_duration_days, 10) || null
+            };
+          }
+        });
+
         const res = await api.post('/estimates/schedule-save', {
           doc_id: docId,
           schedules: payload,
-          dependencies: currentDeps
+          dependencies: currentDeps,
+          wbs_periods: wbsPeriods
         });
 
         if (res.data && res.data.success) {
@@ -765,7 +898,79 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         setSaving(false);
       }
     }, 1500);
-  }, [docId, api, dependencies]);
+  }, [docId, api, dependencies, wbsList]);
+
+  // Изменение периода конструктива (дата начала / длительность) — эти поля хранятся прямо на
+  // узле WBS (period_start_date/period_duration_days), проверка "работы внутри укладываются
+  // в период" делается на сервере при сохранении (см. /schedule-save), клиент просто отправляет
+  // текущее значение и показывает ошибку из ответа, если не уложились.
+  const handleWbsPeriodChange = (wbsId, field, value) => {
+    // Проект ⊇ Конструктив ⊇ Работы: период конструктива обязан укладываться в календарь
+    // проекта — значение, которое выходит за его пределы, не принимаем вообще (поле остаётся
+    // как было). Любая дата ВНУТРИ проекта — годится.
+    const currentNode = wbsList.find(n => n.id === wbsId);
+    if (currentNode) {
+      const proposedNode = { ...currentNode, [field]: value };
+      if (proposedNode.period_start_date) {
+        const periodStartD = parseDateString(proposedNode.period_start_date);
+        const projectStartD = parseDateString(projectStartDate);
+        if (projectStartD && periodStartD && periodStartD < projectStartD) {
+          setErrorToast(`Дата начала конструктива не может быть раньше начала проекта (${formatDisplayDate(projectStartDate)}).`);
+          return;
+        }
+        if (proposedNode.period_duration_days) {
+          const projectEndD = parseDateString(projectEndDate);
+          const periodEndD = parseDateString(calculateEndDate(proposedNode.period_start_date, proposedNode.period_duration_days));
+          if (projectEndD && periodEndD && periodEndD > projectEndD) {
+            setErrorToast(`Период конструктива выходит за пределы календаря проекта (проект заканчивается ${formatDisplayDate(projectEndDate)}).`);
+            return;
+          }
+        }
+      }
+    }
+
+    // Дошли сюда — значение прошло проверку, гасим тост, если он остался от предыдущей
+    // неудачной попытки (иначе сообщение об ошибке так и висело бы после исправления).
+    if (errorToast) setErrorToast('');
+
+    setIsDirty(true);
+    const nextWbsList = wbsList.map(node => node.id === wbsId ? { ...node, [field]: value } : node);
+    setWbsList(nextWbsList);
+
+    let nextWorksSchedule = worksSchedule;
+
+    // Как только у конструктива проставили дату начала — сразу подставляем ту же дату всем
+    // работам внутри (включая вложенные подконструктивы), чтобы не заполнять их по одной.
+    // Пользователь потом может поправить даты отдельных работ вручную и связать их —
+    // это никак не блокируется, просто убирает лишнюю ручную работу на старте.
+    if (field === 'period_start_date' && value) {
+      const descendantWbsIds = new Set([wbsId]);
+      const queue = [wbsId];
+      while (queue.length > 0) {
+        const current = queue.pop();
+        nextWbsList.forEach(node => {
+          if (node.parent_id === current && !descendantWbsIds.has(node.id)) {
+            descendantWbsIds.add(node.id);
+            queue.push(node.id);
+          }
+        });
+      }
+
+      const updatedWorks = {};
+      Object.values(worksSchedule).forEach(w => {
+        if (descendantWbsIds.has(w.wbs_id)) {
+          updatedWorks[w.id] = { ...w, start_date: value };
+        }
+      });
+
+      if (Object.keys(updatedWorks).length > 0) {
+        nextWorksSchedule = { ...worksSchedule, ...updatedWorks };
+        setWorksSchedule(nextWorksSchedule);
+      }
+    }
+
+    triggerAutoSave(nextWorksSchedule, dependencies, nextWbsList);
+  };
 
   const handleFieldChange = (workId, field, value) => {
     if (showCriticalPath && field === 'duration_days') {
@@ -795,13 +1000,30 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
 
       const updated = { ...current, [field]: value };
       const err = validateWorkSchedule(updated);
-      updated.error = err;
 
-      if (err) {
+      // Работа обязана укладываться в календарь проекта — значение, которое в него не
+      // попадает, не принимаем вообще (откат на предыдущее: было пусто — останется пусто,
+      // было корректное — оно и останется). Раньше это "зависало" в автосохранении навсегда,
+      // но теперь сам /schedule-save пропускает проблемную работу и не валит весь КП (см. его
+      // комментарий) — так что откат здесь больше ничего не ломает, просто не даёт ввести
+      // заведомо неверное значение.
+      if (err && (field === 'start_date' || field === 'duration_days')) {
         setErrorToast(err);
-      } else if (errorToast) {
-        setErrorToast('');
+        return prev;
       }
+
+      // Работа обязана укладываться в период СВОЕГО конструктива (если он задан) — тот же
+      // принцип: любая дата ВНУТРИ периода конструктива годится, за пределами — не принимаем.
+      if (!err && (field === 'start_date' || field === 'duration_days')) {
+        const periodError = validateWorkAgainstConstructPeriod(workId, { ...prev, [workId]: updated });
+        if (periodError) {
+          setErrorToast(periodError);
+          return prev;
+        }
+      }
+
+      updated.error = null;
+      if (errorToast) setErrorToast('');
 
       let nextState = { ...prev, [workId]: updated };
 
@@ -991,16 +1213,22 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
     if (!minDate || !maxDate) return '';
 
     const totalDays = Math.max(1, Math.round((maxDate - minDate) / (1000 * 60 * 60 * 24)) + 1);
-    const leftW = 170;
-    const rowH = 22;
+    // Расширено с 170 до 260px — при 170px названия работ обрезались уже после ~32 символов,
+    // из-за чего в PDF терялась значимая часть наименования (например, коды работ с длинным
+    // описанием). 260px даёт место для ~42 символов на строку при font-size 9.
+    const leftW = 260;
+    // Увеличено с 22 до 32 — название работы теперь переносится на 2 строки (см. wrapGanttLabel)
+    // вместо обрезки многоточием после одной строки, иначе длинные названия всё равно терялись.
+    const rowH = 32;
     // Заголовок из двух строк: месяцы сверху, числа дней снизу (числа рисуем только если
     // хватает места — иначе показываем один укрупнённый ряд по месяцам).
-    const showDayTicks = (800 / totalDays) >= 9;
-    const headerH = showDayTicks ? 40 : 24;
     // Ширина одного дня подбирается так, чтобы ВСЯ временная шкала гарантированно влезала
     // в печатную область A4-альбомной страницы (контейнер экспорта — EXPORT_WIDTH px,
     // см. handleExportSchedulePDF), а не обрезалась сбоку — без нижнего порога в пикселях.
-    const chartW = 800;
+    // Уменьшено с 800 до 730, чтобы компенсировать расширение leftW и не выйти за EXPORT_WIDTH.
+    const chartW = 730;
+    const showDayTicks = (chartW / totalDays) >= 9;
+    const headerH = showDayTicks ? 40 : 24;
     const dayW = chartW / totalDays;
     const svgW = leftW + chartW + 10;
     const svgH = headerH + worksList.length * rowH + 10;
@@ -1055,13 +1283,26 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
       const s = parseDateString(w.start_date);
       const startX = leftW + (s ? dayOffset(s) * dayW : 0);
       const barW = Math.max(2, (parseInt(w.duration_days, 10) || 1) * dayW);
-      const barY = y + rowH / 2 - 5;
-      const label = (w.name || '—').length > 34 ? (w.name || '').slice(0, 32) + '…' : (w.name || '—');
-      const laborLabel = w.labor_count ? `👤${w.labor_count}` : '';
+      const barH = 14;
+      const barY = y + rowH / 2 - barH / 2;
+      const labelLines = wrapGanttLabel(w.name, 42, 2);
+      const labelY = labelLines.length > 1 ? y + rowH / 2 - 5 : y + rowH / 2 + 3;
+      const labelHtml = labelLines.map((line, i) => `<text x="6" y="${labelY + i * 11}" font-size="9" fill="#1e293b">${line}</text>`).join('');
+      const laborLabel = w.labor_count ? `👤${formatLaborCount(w.labor_count)}` : '';
+      // Подпись прямо на самой полоске (не только слева) — название работы, обрезанное по
+      // ширине бара; если бар слишком узкий, чтобы вместить хотя бы несколько букв, подпись
+      // не рисуем (остаётся только левая подпись).
+      const barFontSize = 8;
+      const maxBarChars = Math.floor((barW - 8) / (barFontSize * 0.6));
+      const barLabel = maxBarChars >= 3 ? truncateGanttBarLabel(w.name, maxBarChars) : '';
+      const barLabelHtml = barLabel
+        ? `<text x="${startX + 4}" y="${barY + barH / 2 + 3}" font-size="${barFontSize}" font-weight="600" fill="#ffffff">${barLabel}</text>`
+        : '';
       rowsHtml += `
         <rect x="0" y="${y}" width="${svgW}" height="${rowH}" fill="${idx % 2 === 0 ? '#ffffff' : '#f8fafc'}" stroke="#e2e8f0"/>
-        <text x="6" y="${y + rowH / 2 + 4}" font-size="9" fill="#1e293b">${label}</text>
-        <rect x="${startX}" y="${barY}" width="${barW}" height="10" rx="2" fill="${isCritical ? '#e11d48' : '#2563eb'}"/>
+        ${labelHtml}
+        <rect x="${startX}" y="${barY}" width="${barW}" height="${barH}" rx="2" fill="${isCritical ? '#e11d48' : '#2563eb'}"/>
+        ${barLabelHtml}
         ${laborLabel ? `<text x="${startX + barW + 4}" y="${y + rowH / 2 + 4}" font-size="8" fill="#475569">${laborLabel}</text>` : ''}
       `;
     });
@@ -1129,14 +1370,14 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
       rowsHtml += `
         <tr>
           <td>${w.code || '—'}</td>
-          <td class="text-left font-semibold ellipsis">${w.name || '—'}</td>
+          <td class="text-left font-semibold wrap">${w.name || '—'}</td>
           <td>${w.unit || '—'}</td>
           <td class="text-right">${w.volume ?? '—'}</td>
           <td>${formatDisplayDate(w.start_date)}</td>
           <td>${endDateStr ? formatDisplayDate(endDateStr) : '—'}</td>
           <td class="text-right">${w.duration_days || 1} ${t.schedDaysUnit || 'дн.'}</td>
-          <td class="text-right">${w.labor_count || 0}</td>
-          <td class="text-left ellipsis">${managerName}</td>
+          <td class="text-right">${formatLaborCount(w.labor_count || 0)}</td>
+          <td class="text-left wrap">${managerName}</td>
           <td class="text-center ${isCritical ? 'text-danger' : ''}">${isCritical ? (t.gprYes || 'Да') : (t.gprNo || 'Нет')}</td>
         </tr>
       `;
@@ -1217,11 +1458,12 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         if (td.classList.contains('text-center')) td.style.textAlign = 'center';
         if (td.classList.contains('font-semibold')) td.style.fontWeight = '600';
         if (td.classList.contains('text-danger')) td.style.color = '#e11d48';
-        if (td.classList.contains('ellipsis')) {
-          td.style.overflow = 'hidden';
-          td.style.textOverflow = 'ellipsis';
-          td.style.whiteSpace = 'nowrap';
-          td.style.maxWidth = '0';
+        if (td.classList.contains('wrap')) {
+          // В печатной форме нет прокрутки — полный текст должен переноситься по строкам,
+          // а не обрезаться многоточием, иначе часть названия работы/ответственного теряется безвозвратно.
+          td.style.whiteSpace = 'normal';
+          td.style.overflowWrap = 'break-word';
+          td.style.wordBreak = 'break-word';
         }
       }
     });
@@ -1301,12 +1543,27 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
       const nameLang = lang === 'ka' ? 'ka' : (lang === 'ge' ? 'ka' : lang);
       const wbsName = node[`name_${nameLang}`] || node.name_ka || node.name_ge || node.name_az || node.name_en || node.name_ru || node.name;
 
+      // Период конструктива не укладывается в календарь проекта — подсвечиваем сам этот
+      // раздел красным, чтобы сразу было видно, какой именно конструктив неверный (обычно
+      // такого быть не должно — ввод такого значения уже блокируется, но на случай старых
+      // данных подсветка всё равно нужна).
+      let constructPeriodError = null;
+      if (node.type === 'construct' && node.period_start_date && node.period_duration_days) {
+        const periodStartD = parseDateString(node.period_start_date);
+        const projectStartD = parseDateString(projectStartDate);
+        const projectEndD = parseDateString(projectEndDate);
+        const periodEndD = parseDateString(calculateEndDate(node.period_start_date, node.period_duration_days));
+        if ((projectStartD && periodStartD && periodStartD < projectStartD) || (projectEndD && periodEndD && periodEndD > projectEndD)) {
+          constructPeriodError = `Период конструктива «${wbsName}» выходит за пределы календаря проекта (${formatDisplayDate(projectStartDate)} — ${formatDisplayDate(projectEndDate)}).`;
+        }
+      }
+
       return (
         <div key={node.id} style={{ display: 'flex', flexDirection: 'column' }}>
           {/* Раздел WBS */}
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 140px 100px 100px 90px 180px 120px',
-            alignItems: 'center', padding: '10px 20px', background: '#f8fafc',
+            alignItems: 'center', padding: '10px 20px', background: constructPeriodError ? '#fef2f2' : '#f8fafc',
             borderBottom: '1px solid #f1f5f9', borderLeft: depth === 0 ? '4px solid #6366f1' : '3px solid #94a3b8'
           }}>
             <div
@@ -1317,11 +1574,57 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: '800', color: '#1e293b' }}>
                 <FolderOpen size={14} color="#6366f1" />
                 {wbsName}
+                {constructPeriodError && (
+                  <span title={constructPeriodError} style={{
+                    fontSize: '9px', fontWeight: '800', padding: '2px 6px', borderRadius: '6px',
+                    background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', whiteSpace: 'nowrap'
+                  }}>
+                    ⚠ {lang === 'en' ? 'Fix dates' : lang === 'ka' ? 'შეასწორეთ თარიღი' : lang === 'az' ? 'Tarixi düzəldin' : 'Измените дату/дни'}
+                  </span>
+                )}
               </span>
             </div>
 
-            <div style={{ color: '#cbd5e1', fontWeight: 'bold' }}>—</div>
-            <div style={{ color: '#cbd5e1', fontWeight: 'bold' }}>—</div>
+            {/* Период конструктива: работы внутри (и вложенные подконструктивы) должны
+                укладываться в этот период — проверяется на сервере при сохранении. Только
+                для узлов типа "construct" — у остальных уровней WBS периода нет. */}
+            {node.type === 'construct' ? (
+              <>
+                <div>
+                  <input
+                    type="date"
+                    value={node.period_start_date || ''}
+                    disabled={docMeta?.is_readonly}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { e.stopPropagation(); handleWbsPeriodChange(node.id, 'period_start_date', e.target.value); }}
+                    style={{
+                      width: '120px', padding: '6px 8px', borderRadius: '8px',
+                      border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: '700', color: '#1e293b'
+                    }}
+                  />
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min="1"
+                    value={node.period_duration_days || ''}
+                    disabled={docMeta?.is_readonly}
+                    placeholder={t.schedColDurationDays || 'Дней'}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { e.stopPropagation(); handleWbsPeriodChange(node.id, 'period_duration_days', e.target.value); }}
+                    style={{
+                      width: '70px', padding: '6px 8px', borderRadius: '8px',
+                      border: '1px solid #cbd5e1', fontSize: '12px', fontWeight: '700', color: '#1e293b'
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ color: '#cbd5e1', fontWeight: 'bold' }}>—</div>
+                <div style={{ color: '#cbd5e1', fontWeight: 'bold' }}>—</div>
+              </>
+            )}
 
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
               <div style={{ width: '50px', height: '6px', background: '#e2e8f0', borderRadius: '3px', overflow: 'hidden' }}>
@@ -1348,6 +1651,14 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
 
               {works.filter(w => !filterOnlyCritical || cpmData[w.id]?.isCritical).map(w => {
                 const isWorkSelected = selectedWorkId === w.id;
+                // Работа не укладывается в период своего конструктива (см. getConstructPeriodForWork/
+                // validateWorkAgainstConstructPeriod выше) — подсвечиваем строку и коротким значком
+                // показываем, что делать; полный текст — в title (подсказка при наведении).
+                const periodError = validateWorkAgainstConstructPeriod(w.id, worksSchedule);
+                const periodBadgeLabel = lang === 'en' ? 'Fix dates'
+                  : lang === 'ka' ? 'შეასწორეთ თარიღი'
+                  : lang === 'az' ? 'Tarixi düzəldin'
+                  : 'Измените дату/дни';
                 return (
                   <div
                     key={w.id}
@@ -1361,14 +1672,14 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                     style={{
                       display: 'grid', gridTemplateColumns: '1fr 140px 100px 100px 90px 180px 120px',
                       alignItems: 'center', padding: '10px 20px', borderBottom: '1px solid #f1f5f9',
-                      background: isWorkSelected ? '#eff6ff' : '#ffffff',
+                      background: periodError ? '#fef2f2' : (isWorkSelected ? '#eff6ff' : '#ffffff'),
                       cursor: 'pointer'
                     }}
                   >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: `${(depth + 1) * 20}px` }}>
                     <span style={{
                       width: '6px', height: '6px',
-                      background: '#3b82f6',
+                      background: periodError ? '#dc2626' : '#3b82f6',
                       borderRadius: '50%', flexShrink: 0
                     }} />
                     <span style={{
@@ -1378,6 +1689,15 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                     }}>
                       {w.name}
                     </span>
+                    {periodError && (
+                      <span title={periodError} style={{
+                        fontSize: '9px', fontWeight: '800', padding: '2px 6px', borderRadius: '6px',
+                        marginLeft: '4px', flexShrink: 0, background: '#fee2e2', color: '#dc2626',
+                        border: '1px solid #fca5a5', whiteSpace: 'nowrap'
+                      }}>
+                        ⚠ {periodBadgeLabel}
+                      </span>
+                    )}
                     {showCriticalPath && cpmData[w.id] !== undefined && (
                       <span style={{
                         fontSize: '9px',
@@ -1390,7 +1710,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                         color: cpmData[w.id].isCritical ? '#e11d48' : '#64748b',
                         border: cpmData[w.id].isCritical ? '1px solid #fda4af' : '1px solid #e2e8f0'
                       }}>
-                        {cpmData[w.id].isCritical ? 'Критический путь' : `Резерв: ${cpmData[w.id].totalFloat} дн.`}
+                        {cpmData[w.id].isCritical ? (t.cpBtnCriticalPath || 'Критический путь') : (t.cpReserveDays || 'Резерв: {days} дн.').replace('{days}', cpmData[w.id].totalFloat)}
                       </span>
                     )}
                   </div>
@@ -1425,7 +1745,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
 
                   {/* Людей: сумма ресурсов типа "Люди" на эту работу */}
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', color: w.labor_count > 0 ? '#334155' : '#cbd5e1', fontWeight: '700', fontSize: '12px' }}>
-                    {w.labor_count > 0 ? (<><Users size={12} /> {w.labor_count}</>) : '—'}
+                    {w.labor_count > 0 ? (<><Users size={12} /> {formatLaborCount(w.labor_count)}</>) : '—'}
                   </div>
 
                   {/* Выбор исполнителя: показываем только сметчиков */}
@@ -1480,7 +1800,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         background: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0',
         boxShadow: '0 4px 12px rgba(0,0,0,0.02)', overflow: 'hidden'
       }}>
-        <div style={{ maxHeight: '350px', overflowY: 'auto', position: 'relative' }}>
+        <div style={{ maxHeight: 'calc(100vh - 120px)', overflowY: 'auto', position: 'relative' }}>
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 140px 100px 100px 90px 180px 120px',
             padding: '12px 20px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0',
@@ -1628,9 +1948,23 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
               {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
               <span style={{ fontSize: '11px', fontWeight: '800', color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{wbsName}</span>
             </div>
-            <div style={{ fontSize: '11px', color: '#64748b' }}>{projectStartDate}</div>
-            <div style={{ fontSize: '11px', fontWeight: '800', color: '#64748b', textAlign: 'center' }}>—</div>
-            <div style={{ fontSize: '11px', color: '#cbd5e1' }}>—</div>
+            {/* Раньше тут всегда стояла дата начала ПРОЕКТА (заглушка) и прочерки — период
+                самого конструктива нигде не показывался. Теперь показываем его. */}
+            {node.type === 'construct' && node.period_start_date ? (
+              <>
+                <div style={{ fontSize: '11px', color: '#4338ca', fontWeight: '700' }}>{formatDisplayDate(node.period_start_date)}</div>
+                <div style={{ fontSize: '11px', fontWeight: '800', color: '#4338ca', textAlign: 'center' }}>{node.period_duration_days || '—'}</div>
+                <div style={{ fontSize: '11px', color: '#4338ca', fontWeight: '700' }}>
+                  {node.period_duration_days ? formatDisplayDate(calculateEndDate(node.period_start_date, node.period_duration_days)) : '—'}
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: '11px', color: '#cbd5e1' }}>—</div>
+                <div style={{ fontSize: '11px', fontWeight: '800', color: '#cbd5e1', textAlign: 'center' }}>—</div>
+                <div style={{ fontSize: '11px', color: '#cbd5e1' }}>—</div>
+              </>
+            )}
             <div style={{ color: '#cbd5e1' }}>—</div>
           </div>
 
@@ -1732,6 +2066,22 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         wbsBarWidth = durationDays * columnWidth;
       }
 
+      // Период самого конструктива (не работ внутри) — раньше на Гантте у заголовка раздела
+      // вообще ничего не рисовалось, пока его не свернули (тогда показывался сборный бар по
+      // работам). Дата, которую поставили НА КОНСТРУКТИВЕ, нигде не была видна. Рисуем для неё
+      // отдельную полосу-рамку прямо в заголовке — видна всегда, свёрнут раздел или нет.
+      let constructPeriodBar = null;
+      if (node.type === 'construct' && node.period_start_date && node.period_duration_days && ganttRange.startDate) {
+        const periodStart = parseDateString(node.period_start_date);
+        const periodDays = parseInt(node.period_duration_days, 10) || 1;
+        if (periodStart) {
+          const periodOffset = Math.max(0, Math.ceil((periodStart - ganttRange.startDate) / (1000 * 60 * 60 * 24))) * columnWidth;
+          const periodWidth = Math.max(1, periodDays) * columnWidth;
+          const periodEndStr = calculateEndDate(node.period_start_date, periodDays);
+          constructPeriodBar = { left: periodOffset, width: periodWidth, label: `${formatDisplayDate(node.period_start_date)} — ${formatDisplayDate(periodEndStr)}` };
+        }
+      }
+
       return (
         <React.Fragment key={`gantt-bars-${node.id}`}>
           <div style={{
@@ -1739,6 +2089,21 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
             display: 'flex', alignItems: 'center', background: '#f8fafc',
             boxSizing: 'border-box'
           }}>
+            {constructPeriodBar && (
+              <div
+                title={constructPeriodBar.label}
+                style={{
+                  position: 'absolute', left: `${constructPeriodBar.left}px`, width: `${constructPeriodBar.width}px`,
+                  height: '16px', top: '50%', transform: 'translateY(-50%)',
+                  border: '2px dashed #6366f1', borderRadius: '6px', background: 'rgba(99, 102, 241, 0.08)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '9px', fontWeight: '800', color: '#4338ca', whiteSpace: 'nowrap', overflow: 'hidden',
+                  pointerEvents: 'none', zIndex: 4
+                }}
+              >
+                {constructPeriodBar.label}
+              </div>
+            )}
             {isCollapsed && getRecursiveWorksForWbs(node.id).map(w => {
               const startDate = parseDateString(w.start_date);
               const duration = parseInt(w.duration_days, 10) || 1;
@@ -1801,6 +2166,10 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                   : '0 2px 4px rgba(59, 130, 246, 0.2)';
 
                 const isWorkSelected = selectedWorkId === w.id;
+                // Точки видны только при наведении на эту работу, либо пока идёт создание
+                // связи (linkingSource) — иначе нужно видеть точки у ВСЕХ работ, чтобы было
+                // куда кликнуть вторым концом.
+                const showDots = hoveredGanttWorkId === w.id || !!linkingSource;
                 const dotStyle = {
                   position: 'absolute',
                   width: '8px',
@@ -1812,12 +2181,17 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                   transform: 'translate(-50%, -50%)',
                   cursor: 'pointer',
                   zIndex: 20,
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                  opacity: showDots ? 1 : 0,
+                  pointerEvents: showDots ? 'auto' : 'none',
+                  transition: 'opacity 0.15s ease'
                 };
 
                 return (
                   <div
                     key={`bar-work-${w.id}`}
+                    onMouseEnter={() => setHoveredGanttWorkId(w.id)}
+                    onMouseLeave={() => setHoveredGanttWorkId(prev => (prev === w.id ? null : prev))}
                     onClick={() => {
                       if (linkingSource) {
                         handleSelectTarget(w.id, 'start');
@@ -1852,7 +2226,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                             height: '18px', background: barBg, borderRadius: '4px',
                             display: 'flex', alignItems: 'center', padding: '0 6px', color: 'white',
                             fontSize: '9px', fontWeight: '800', overflow: 'hidden', boxShadow: barShadow,
-                            whiteSpace: 'nowrap', textOverflow: 'ellipsis'
+                            whiteSpace: 'nowrap', textOverflow: 'ellipsis', zIndex: 10
                           }}
                         >
                           {w.name}
@@ -1861,7 +2235,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                         {/* Значок "люди" — отдельно справа от полоски, не сжимает саму полоску */}
                         {w.labor_count > 0 && (
                           <div
-                            title={`${t.schedColLaborCount || 'Людей'}: ${w.labor_count}`}
+                            title={`${t.schedColLaborCount || 'Людей'}: ${formatLaborCount(w.labor_count)}`}
                             style={{
                               position: 'absolute', left: `${leftOffset + barWidth + 8}px`,
                               top: '50%', transform: 'translateY(-50%)',
@@ -1871,7 +2245,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                               whiteSpace: 'nowrap', pointerEvents: 'none'
                             }}
                           >
-                            <Users size={10} /> {w.labor_count}
+                            <Users size={10} /> {formatLaborCount(w.labor_count)}
                           </div>
                         )}
 
@@ -1904,7 +2278,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         background: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0',
         boxShadow: '0 4px 12px rgba(0,0,0,0.02)', overflow: 'hidden'
       }}>
-        <div style={{ maxHeight: compact ? '350px' : '650px', overflow: 'auto', position: 'relative' }}>
+        <div style={{ maxHeight: compact ? '350px' : 'calc(100vh - 120px)', overflow: 'auto', position: 'relative' }}>
           <div style={{ display: 'flex', minWidth: 'fit-content' }}>
             {/* Левая сплит-панель */}
             <div style={{
@@ -1984,16 +2358,19 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
             backgroundSize: `${columnWidth}px 100%`,
             width: `${totalWidth}px`
           }}>
-            {/* SVG overlay for Gantt dependencies */}
+            {/* SVG overlay for Gantt dependencies — должен быть НАД пустым фоном строк (иначе
+                стрелки вообще не видно — они бы прятались под белым фоном каждой строки), но
+                ПОД самой цветной полоской работы с названием (иначе стрелка рисуется поверх
+                текста и перекрывает его). См. zIndex на самой полоске ниже (barZIndex). */}
             <svg style={{ position: 'absolute', top: 0, left: 0, width: `${totalWidth}px`, height: `${currentY}px`, pointerEvents: 'none', zIndex: 5 }}>
               <defs>
-                <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
                   <path d="M 0 1.5 L 6 5 L 0 8.5 z" fill="#6366f1" />
                 </marker>
-                <marker id="arrow-selected" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <marker id="arrow-selected" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="10" markerHeight="10" orient="auto-start-reverse">
                   <path d="M 0 1.5 L 6 5 L 0 8.5 z" fill="#ef4444" />
                 </marker>
-                <marker id="arrow-critical" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <marker id="arrow-critical" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
                   <path d="M 0 1.5 L 6 5 L 0 8.5 z" fill="#e11d48" />
                 </marker>
               </defs>
@@ -2049,7 +2426,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                       d={pathD}
                       fill="none"
                       stroke="#6366f1"
-                      strokeWidth="1.5"
+                      strokeWidth="2"
                       strokeDasharray={dep.type === 'FS' ? 'none' : '4 3'}
                       markerEnd="url(#arrow)"
                       style={{ cursor: 'pointer', pointerEvents: 'stroke' }}
@@ -2752,11 +3129,18 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
               Отмена
             </button>
             <button
+              disabled={autoSaveStatus === 'pending' || autoSaveStatus === 'saving'}
+              title={(autoSaveStatus === 'pending' || autoSaveStatus === 'saving') ? (t.cpWaitForSave || 'Дождитесь сохранения предыдущего изменения и попробуйте снова.') : ''}
               onClick={() => {
                 const ok = handleAddDirectDependency(modalPredecessorId, modalSuccessorId, newDependencyType, newDependencyLag);
                 if (ok) setShowCreateLinkModal(false);
               }}
-              style={{ padding: '10px 20px', borderRadius: '10px', border: 'none', background: '#2563eb', color: '#ffffff', fontWeight: '750', cursor: 'pointer' }}
+              style={{
+                padding: '10px 20px', borderRadius: '10px', border: 'none',
+                background: (autoSaveStatus === 'pending' || autoSaveStatus === 'saving') ? '#94a3b8' : '#2563eb',
+                color: '#ffffff', fontWeight: '750',
+                cursor: (autoSaveStatus === 'pending' || autoSaveStatus === 'saving') ? 'not-allowed' : 'pointer'
+              }}
             >
               Сохранить
             </button>
@@ -3120,7 +3504,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
               }}
             >
               <Zap size={14} color={showCriticalPath ? '#e11d48' : '#64748b'} />
-              Критический путь
+              {t.cpBtnCriticalPath || 'Критический путь'}
             </button>
 
             {showCriticalPath && (
@@ -3136,7 +3520,7 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
                 }}
               >
                 <Filter size={14} color={filterOnlyCritical ? '#ffffff' : '#e11d48'} />
-                Только критические
+                {t.cpBtnOnlyCritical || 'Только критические'}
               </button>
             )}
           </div>
@@ -3182,18 +3566,9 @@ function SchedulingTab({ docId, currentObj, api, lang = 'ru', t = {}, projectNam
         </div>
       </div>
 
-      {/* --- ТАБЛИЦА СВЕРХУ + ГАНТТ СНИЗУ --- */}
-      {activeView === 'table' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {renderTableBlock()}
-          <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '16px' }}>
-            <h3 style={{ fontSize: '14px', fontWeight: '800', margin: '0 0 12px 0', color: '#475569' }}>
-              {t.schedGanttTitle || 'Диаграмма Ганта'}
-            </h3>
-            <div ref={ganttBlockRef}>{renderGanttBlock(true)}</div>
-          </div>
-        </div>
-      )}
+      {/* Раньше здесь под таблицей ещё раз дублировался Гантт — но переключатель
+          ТАБЛИЦА/ГАНТТ выше уже даёт выбрать нужный вид, дублирование только отнимало место. */}
+      {activeView === 'table' && renderTableBlock()}
 
       {/* --- ПОЛНОРАЗМЕРНЫЙ ГАНТТ --- */}
       {activeView === 'gantt' && <div ref={ganttBlockRef}>{renderGanttBlock(false)}</div>}

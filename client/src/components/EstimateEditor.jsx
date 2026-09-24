@@ -5,7 +5,7 @@ import {
   ArrowLeft, FolderPlus, PlusCircle, Trash2, Database, Box, User, Settings,
   Save, CheckCircle2, X, Calculator, Percent, Plus, Folder, Briefcase, List,
   Download, Send, ChevronDown, ChevronUp, ChevronRight, ChevronLeft, FileText, LayoutGrid, Edit,
-  MinusCircle, RotateCcw, Copy, Eye, EyeOff, Cloud, RefreshCw, AlertTriangle, Calendar
+  MinusCircle, RotateCcw, Copy, Eye, EyeOff, Cloud, RefreshCw, AlertTriangle
 } from 'lucide-react';
 
 const CURRENCY = '₾'; // Валюта (легко изменить на ₸, $, € и т.д.)
@@ -175,7 +175,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
   const [resourceTypeFilter, setResourceTypeFilter] = useState('all');
   const [selectedWorkUnit, setSelectedWorkUnit] = useState('');
   const [selectedResourceUnit, setSelectedResourceUnit] = useState('');
-  const [isHeaderHovered, setIsHeaderHovered] = useState(false);
+  const [isHeaderExpanded, setIsHeaderExpanded] = useState(true);
 
   const handleLanguageChange = (lang) => {
     setIsLangLoading(true);
@@ -283,10 +283,22 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
 
   useEffect(() => {
     if (!data || !originalData) return;
-    
-    // Блокируем автосохранение для плановых и утвержденных версий
+
+    // Защита от гонки при переключении версий (например, стрелками ◀▶ между рабочей и
+    // плановой): смена activeDocId запускает fetchData() асинхронно, а до его завершения
+    // data/originalData ещё принадлежат ПРЕЖНЕЙ версии. Если в этот момент в них были
+    // несохранённые правки, этот эффект всё равно перезапускается (activeDocId — в зависимостях)
+    // и планирует автосохранение уже под НОВЫЙ activeDocId, но со старыми данными — в другую
+    // смету улетает чужой (и часто пустой/неполный) снимок wbs/works/resources, затирая её.
+    // data.doc.id — это id сметы, которой реально принадлежит текущий снимок; сравниваем с
+    // activeDocId и не даём эффекту работать, пока они не совпадут (то есть пока не подгрузятся
+    // данные именно той сметы, которая сейчас открыта).
+    if (data?.doc?.id !== activeDocId) return;
+
+    // Блокируем автосохранение для плановых и утвержденных версий — КРОМЕ статуса
+    // "Сформирована" (planned_formed), его теперь можно редактировать (см. isApproved ниже).
     const currentStatus = data?.doc?.status;
-    const isLocked = currentStatus === 'approved' || (currentStatus && currentStatus.startsWith('planned_'));
+    const isLocked = currentStatus === 'approved' || (currentStatus && currentStatus.startsWith('planned_') && currentStatus !== 'planned_formed');
     if (isLocked) return;
 
     // Check if there are changes to save
@@ -305,6 +317,10 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
       setAutoSaveStatus('saving');
       setIsSaving(true);
       try {
+        const hasTempIds = (data.works || []).some(w => String(w.id).startsWith('temp_')) ||
+                           (data.resources || []).some(r => String(r.id).startsWith('temp_')) ||
+                           (data.wbs || []).some(w => String(w.id).startsWith('temp_'));
+
         await api.post(`/estimates/${activeDocId}/save`, {
           wbs: data.wbs,
           works: data.works,
@@ -315,7 +331,11 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
           currency_id: data.doc?.currency_id || null
         });
         
-        setOriginalData(JSON.parse(JSON.stringify(data)));
+        if (hasTempIds) {
+          await fetchData();
+        } else {
+          setOriginalData(JSON.parse(JSON.stringify(data)));
+        }
         setAutoSaveStatus('saved');
         setTimeout(() => setAutoSaveStatus('idle'), 3000);
       } catch (err) {
@@ -709,8 +729,18 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
 
   const handleAddWorkElement = async () => {
     const targetWbsId = formData.parentId;
-    if (!selectedWorkId || !formData.volume || !targetWbsId) {
-      alert("Пожалуйста, выберите работу, введите объем и выберите родительский раздел WBS.");
+    if (!targetWbsId) {
+      alert(t.msgSelectSubconstructForWork || "Для добавления работы выберите подконструктив (конечный уровень структуры WBS).");
+      return;
+    }
+    const parentNode = data?.wbs?.find(n => n.id === targetWbsId);
+    const parentType = parentNode ? String(parentNode.type).toLowerCase() : '';
+    if (!parentNode || (parentType !== 'subconstruct' && parentType !== 'activity type' && parentType !== 'activity_type')) {
+      alert(t.msgSelectSubconstructForWork || "Для добавления работы выберите подконструктив (конечный уровень структуры WBS).");
+      return;
+    }
+    if (!selectedWorkId || !formData.volume) {
+      alert(t.validationError || "Пожалуйста, выберите работу и укажите объем.");
       return;
     }
     setIsSaving(true);
@@ -719,13 +749,9 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
       const workDetails = availableWorks.find(w => w.id === selectedWorkId);
       const volume = parseFloat(formData.volume);
 
-      // Проверка на дубликат работы в выбранном WBS разделе
-      const isWorkDuplicate = data?.works?.some(w => w.wbs_id === targetWbsId && w.work_id === selectedWorkId);
-      if (isWorkDuplicate) {
-        alert("Эта работа уже добавлена в данный раздел!");
-        setIsSaving(false);
-        return;
-      }
+      // Одну и ту же работу теперь можно добавлять в раздел несколько раз — при сохранении
+      // каждая становится отдельной строкой est_doc_works со своим id (work_id — ссылка на
+      // расценку в справочнике — у них будет одинаковым, это ожидаемо).
 
       // Имя работы на выбранном языке
       const workName = workDetails
@@ -877,7 +903,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
     }
   };
 
-  const handleToggleWorkExclusion = (workId, currentStatus) => {
+  const handleToggleWorkExclusion = async (workId, currentStatus) => {
     const work = data?.works?.find(w => w.id === workId);
     if (!work) return;
 
@@ -891,9 +917,21 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
       return;
     }
 
-    // Если снимаем с расчета — с подтверждением
+    // Если снимаем с расчета — с подтверждением (и предупреждением о связи в КП, если есть)
     const workName = work.est_works?.name || "эту работу";
-    if (!window.confirm(`Вы уверены, что хотите снять с расчета работу "${workName}"? Это изменит итоговую сумму сметы.`)) return;
+    let confirmMsg = currentLang === 'en' ? `Remove work "${workName}" from calculation? This will change the total estimate amount.`
+      : currentLang === 'ka' ? `დარწმუნებული ხართ, რომ გსურთ სამუშაოს "${workName}" გამორიცხვა გაანგარიშებიდან? ეს შეცვლის ხარჯთაღრიცხვის ჯამურ თანხას.`
+      : currentLang === 'az' ? `"${workName}" işini hesablamadan çıxarmaq istədiyinizə əminsiniz? Bu, smetanın ümumi məbləğini dəyişəcək.`
+      : `Вы уверены, что хотите снять с расчета работу "${workName}"? Это изменит итоговую сумму сметы.`;
+    try {
+      const linksRes = await api.get(`/estimates/work-links/${workId}`);
+      if (linksRes.data?.linked && linksRes.data.links?.length > 0) {
+        confirmMsg = t.workLinkWarningShort || confirmMsg;
+      }
+    } catch (err) {
+      console.error('[WORK LINKS CHECK ERROR]:', err);
+    }
+    if (!window.confirm(confirmMsg)) return;
 
     setData(prev => {
       const updatedWorks = prev.works.map(w => w.id === workId ? { ...w, is_excluded: true } : w);
@@ -941,8 +979,24 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
     });
   };
 
-  const handleDeleteWorkForever = (workId) => {
-    if (!window.confirm("Удалить работу из проекта НАВСЕГДА?")) return;
+  const handleDeleteWorkForever = async (workId) => {
+    // Если у работы есть связь в КП (est_work_dependencies) — предупреждаем об этом коротким
+    // сообщением из словаря (t.workLinkWarningShort) вместо обычного подтверждения удаления.
+    // Связь при этом теряется, но дату/длительность связанной работы это не меняет —
+    // бэкенд при сохранении удаляет только саму связь-строку, не трогая другую работу.
+    let confirmMsg = currentLang === 'en' ? 'Delete this work from the project FOREVER?'
+      : currentLang === 'ka' ? 'წაშალოთ ეს სამუშაო პროექტიდან სამუდამოდ?'
+      : currentLang === 'az' ? 'Bu işi layihədən HƏMİŞƏLİK silmək istəyirsiniz?'
+      : 'Удалить работу из проекта НАВСЕГДА?';
+    try {
+      const linksRes = await api.get(`/estimates/work-links/${workId}`);
+      if (linksRes.data?.linked && linksRes.data.links?.length > 0) {
+        confirmMsg = t.workLinkWarningShort || confirmMsg;
+      }
+    } catch (err) {
+      console.error('[WORK LINKS CHECK ERROR]:', err);
+    }
+    if (!window.confirm(confirmMsg)) return;
     setData(prev => ({
       ...prev,
       works: (prev.works || []).filter(w => w.id !== workId),
@@ -1339,11 +1393,18 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
     const norm = parseFloat(formData.norm || 0);
     const quantity = parseFloat(formData.quantity || 0);
     const price = parseFloat(formData.price);
-    const finalPrice = isNaN(price) || price < 0
-      ? (lookupResourcePrice(resourcePrices, editingResource.resource_id) || Number(editingResource.price) || 0)
-      : price;
+    const originalPrice = lookupResourcePrice(resourcePrices, editingResource.resource_id) || Number(editingResource.price) || 0;
+    const finalPrice = isNaN(price) || price < 0 ? originalPrice : price;
 
-    if (!isNaN(price) && price >= 0) {
+    // Раньше сюда заходили ПРИ ЛЮБОМ сохранении этого окна, даже если поменяли только норму
+    // или количество, а цену вообще не трогали (поле просто предзаполнено текущей ценой —
+    // formData.price всегда валидное число). PUT /dictionaries/prices/:resourceId меняет
+    // цену в ОБЩЕМ СПРАВОЧНИКЕ ресурсов и доступен только admin/pricer — сметчик получал 403
+    // "Недостаточно прав" и сохранение норм/количества срывалось целиком, хотя цену он и не
+    // менял. Теперь дёргаем этот эндпоинт, только если цена реально изменилась.
+    const priceActuallyChanged = !isNaN(price) && price >= 0 && Math.abs(finalPrice - originalPrice) > 0.0001;
+
+    if (priceActuallyChanged) {
       try {
         setIsSaving(true);
         await api.put(`/dictionaries/prices/${editingResource.resource_id}`, {
@@ -1582,15 +1643,40 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
 
   const docStatus = data?.doc?.status;
   const isPlan = docStatus && docStatus.startsWith('planned_');
+  // Автосохранение ещё не завершилось ('pending' — таймер тикает, 'saving' — запрос в полёте) —
+  // блокируем "Создать плановую версию"/"Отправить на утверждение", чтобы эти действия не ушли
+  // раньше, чем сохранятся последние правки.
+  const isAutoSaving = autoSaveStatus === 'pending' || autoSaveStatus === 'saving';
   const isActual = data?.doc?.estimate_type === 'actual';
+  // Листание между плановыми версиями сметы стрелками влево/вправо (по возрастанию номера версии).
+  const planVersionsSorted = [...versions]
+    .filter(v => v.estimate_type === 'planned')
+    .sort((a, b) => (a.plan_version || 0) - (b.plan_version || 0));
+  const currentPlanVersionIdx = planVersionsSorted.findIndex(v => v.id === activeDocId);
+  const prevPlanVersion = currentPlanVersionIdx > 0 ? planVersionsSorted[currentPlanVersionIdx - 1] : null;
+  const nextPlanVersion = currentPlanVersionIdx !== -1 && currentPlanVersionIdx < planVersionsSorted.length - 1
+    ? planVersionsSorted[currentPlanVersionIdx + 1]
+    : null;
   const isReadOnlyDoc = isReadOnly || data?.doc?.is_readonly;
-  const hasActualEstimate = !!data?.doc?.has_actual_estimate;
-  // Плановую смету можно редактировать, пока по ней не создана фактическая версия —
-  // после этого плановая блокируется (isApproved), чтобы не разъезжаться с уже созданным фактом.
-  const isApproved = docStatus === 'approved' || isReadOnlyDoc || (isPlan && hasActualEstimate);
-  const isDocApproved = docStatus === 'approved';
-  const canEdit = (userRole === 'admin' || userRole === 'estimator') && !isApproved && !isReadOnlyDoc;
+  // BR-04: утверждать/отклонять может только назначенный утверждающий (plan_approver_id) или admin
+  const canApprovePlan = userRole === 'admin' || (userRole === 'financial_director' && (!currentUserId || data?.doc?.plan_approver_id === currentUserId));
 
+  // Блокировка редактирования:
+  // - Рабочая смета: статус approved или readonly
+  // - Плановая смета в статусе "Сформирована" (planned_formed, до отправки на утверждение) —
+  //   редактируется как обычно (сметчик/admin ещё могут поправить объёмы перед отправкой).
+  // - В остальных статусах плановой сметы редактирование содержимого запрещено для любой роли,
+  //   КРОМЕ назначенного утверждающего (фин.директора/admin) на этапе "На утверждении" — он может
+  //   скорректировать объёмы перед решением, и эти правки сохраняются вместе с утверждением/отклонением (BR-04)
+  const isFinDirReviewing = isPlan && docStatus === 'planned_review' && canApprovePlan;
+  const isPlanFormedEditable = isPlan && docStatus === 'planned_formed';
+  const isApproved = docStatus === 'approved' ||
+                     isReadOnlyDoc ||
+                     (isPlan && !isFinDirReviewing && !isPlanFormedEditable);
+  const isDocApproved = docStatus === 'approved' && !isPlan && !isActual;
+  const canEdit = (userRole === 'admin' || userRole === 'estimator' || (userRole === 'financial_director' && canApprovePlan)) && !isApproved && !isReadOnlyDoc;
+  // BR-01/02 (US-06-004): деактивировать может сметчик/admin, только в статусах "Сформирована"/"Утверждена"
+  const canDeactivatePlan = (userRole === 'admin' || userRole === 'estimator') && ['planned_formed', 'planned_approved'].includes(docStatus);
   const PLAN_STATUS_LABELS = {
     planned_formed: t.estEdStatusFormed || 'Сформирована',
     planned_review: t.estEdStatusReview || 'На утверждении',
@@ -1608,10 +1694,6 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
     planned_inactive: { bg: '#f8fafc', color: '#94a3b8' }
   };
   const getPlanStatusColor = (status) => PLAN_STATUS_COLORS[status] || { bg: '#f1f5f9', color: '#64748b' };
-  // BR-04: утверждать/отклонять может только назначенный утверждающий (plan_approver_id) или admin
-  const canApprovePlan = userRole === 'admin' || (userRole === 'financial_director' && !!currentUserId && data?.doc?.plan_approver_id === currentUserId);
-  // BR-01/02 (US-06-004): деактивировать может сметчик/admin, только в статусах "Сформирована"/"Утверждена"
-  const canDeactivatePlan = (userRole === 'admin' || userRole === 'estimator') && ['planned_formed', 'planned_approved'].includes(docStatus);
   // US-06-005: фактическую версию можно создать только из утверждённой плановой, и только один раз
   const canCreateActual = (userRole === 'admin' || userRole === 'estimator') && docStatus === 'planned_approved' && !data?.doc?.has_actual_estimate;
   const hasPlanActions = docStatus === 'planned_formed' || (docStatus === 'planned_review' && canApprovePlan) || docStatus === 'planned_rejected' || canDeactivatePlan || canCreateActual;
@@ -1660,11 +1742,10 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
   const coefficientsTotal = data?.coefficients?.reduce((sum, c) => sum + (directCosts * Number(c.value_percent) / 100), 0) || 0;
   const grandTotal = directCosts + coefficientsTotal;
 
-  // Общая маржа и рентабельность (маржа = 25% наценка от себестоимости)
-  const MARGIN_MULTIPLIER = 1.25; // 25% маржа от себестоимости
-  const totalRevenue = directCosts * MARGIN_MULTIPLIER + coefficientsTotal; // Доход = себестоимость * 1.25 + коэффициенты
-  const totalMargin = totalRevenue - directCosts; // Маржа = доход - расход
-  const totalProfitability = totalRevenue > 0 ? (totalMargin / totalRevenue) * 100 : 0; // Рентабельность
+  // Маржа = Доход - Расход. Доходной версии сметы пока нет (нет источника дохода),
+  // поэтому маржа и рентабельность пока всегда 0 — без условных коэффициентов/наценок.
+  const totalMargin = 0;
+  const totalProfitability = 0;
 
   // --- Определяем ресурсы для показа ---
   const getVisibleResources = () => {
@@ -1737,23 +1818,35 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
   };
 
   return (
-    <div className="animate-fade-in" style={{ width: '100%', height: '100vh', background: '#f8fafc', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="animate-fade-in" style={{ width: '100%', height: '100vh', background: '#f8fafc', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
 
-      {/* 1. TOP HEADER WITH AUTO-COLLAPSE ON HOVER */}
+      {/* Затемнение экрана на время создания плановой/фактической версии — раньше пользователь
+          видел только надпись "Создание..." на самой кнопке и не понимал, что процесс идёт,
+          пока не появлялась уже готовая новая версия. */}
+      {(isCreatingPlan || isCreatingActual) && (
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(2px)', zIndex: 9999, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+          <RefreshCw size={40} className="animate-spin" color="#ffffff" />
+          <span style={{ color: '#ffffff', fontSize: '15px', fontWeight: '800' }}>
+            {isCreatingPlan
+              ? (t.estEdCreatingPlanOverlay || 'Создаём плановую версию сметы...')
+              : (t.estEdCreatingActualOverlay || 'Создаём фактическую версию сметы...')}
+          </span>
+        </div>
+      )}
+
+      {/* 1. TOP HEADER WITH TOGGLE COLLAPSE */}
       <div 
-        onMouseEnter={() => setIsHeaderHovered(true)}
-        onMouseLeave={() => setIsHeaderHovered(false)}
         style={{
           background: 'white',
-          padding: isHeaderHovered ? '15px 25px' : '8px 20px',
+          padding: isHeaderExpanded ? '15px 25px' : '8px 20px',
           borderBottom: '2px solid #eef2f6',
           display: 'flex',
           flexDirection: 'column',
           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
           overflow: 'hidden',
-          height: isHeaderHovered ? '110px' : '38px',
+          height: isHeaderExpanded ? '110px' : '38px',
           boxSizing: 'border-box',
-          boxShadow: isHeaderHovered ? '0 10px 15px -3px rgba(0,0,0,0.05)' : 'none',
+          boxShadow: isHeaderExpanded ? '0 10px 15px -3px rgba(0,0,0,0.05)' : 'none',
           zIndex: 10
         }}
       >
@@ -1831,19 +1924,29 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                 <option value="az">AZ</option>
                 <option value="tr">TR</option>
               </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {/* Кнопка скрыть/показать шапку */}
+                  <button
+                    onClick={() => setIsHeaderExpanded(v => !v)}
+                    title={isHeaderExpanded ? (t.btnCollapseHeader || 'Скрыть панель') : (t.btnExpandHeader || 'Показать панель')}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center', padding: '2px 4px', borderRadius: '4px' }}
+                  >
+                    {isHeaderExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                </div>
             </div>
           </div>
         </div>
 
-        {/* EXPANDED VIEW (VISIBLE ONLY ON HOVER) */}
+        {/* EXPANDED VIEW (VISIBLE WHEN isHeaderExpanded) */}
         <div style={{ 
           display: 'flex', 
           justifyContent: 'space-between', 
           alignItems: 'center', 
           width: '100%', 
           marginTop: '12px',
-          opacity: isHeaderHovered ? 1 : 0,
-          visibility: isHeaderHovered ? 'visible' : 'hidden',
+          opacity: isHeaderExpanded ? 1 : 0,
+          visibility: isHeaderExpanded ? 'visible' : 'hidden',
           transition: 'opacity 0.25s ease'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
@@ -1852,7 +1955,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
             </button>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <h1 style={{ margin: 0, fontSize: '18px', fontWeight: '950', color: '#1e293b' }}>{data?.doc?.project_id}</h1>
-              {!isApproved && (
+              {!isApproved && !isFinDirReviewing && (
                 <Edit
                   size={14}
                   style={{ cursor: 'pointer', color: '#94a3b8' }}
@@ -1870,12 +1973,28 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
 
             {isPlan ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '2px' }}>
+                <button
+                  onClick={() => prevPlanVersion && setActiveDocId(prevPlanVersion.id)}
+                  disabled={!prevPlanVersion}
+                  title={t.estEdPrevPlanVersion || 'Предыдущая плановая версия'}
+                  style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', padding: '2px', cursor: prevPlanVersion ? 'pointer' : 'default', color: prevPlanVersion ? '#475569' : '#cbd5e1' }}
+                >
+                  <ChevronLeft size={14} />
+                </button>
                 <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '8px', fontWeight: '700', background: '#e2e8f0', color: '#475569' }}>
                   {t.estEdPlanVersionLabel || 'Плановая ver.'} {data?.doc?.plan_version}
                 </span>
                 <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '8px', fontWeight: '700', background: getPlanStatusColor(docStatus).bg, color: getPlanStatusColor(docStatus).color }}>
                   {getPlanStatusLabel(docStatus)}
                 </span>
+                <button
+                  onClick={() => nextPlanVersion && setActiveDocId(nextPlanVersion.id)}
+                  disabled={!nextPlanVersion}
+                  title={t.estEdNextPlanVersion || 'Следующая плановая версия'}
+                  style={{ display: 'flex', alignItems: 'center', background: 'none', border: 'none', padding: '2px', cursor: nextPlanVersion ? 'pointer' : 'default', color: nextPlanVersion ? '#475569' : '#cbd5e1' }}
+                >
+                  <ChevronRight size={14} />
+                </button>
               </div>
             ) : isActual ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '14px', padding: '2px' }}>
@@ -1901,8 +2020,9 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                 {docStatus === 'planned_formed' && (
                   <button
                     className="btn-primary"
-                    disabled={isSaving}
-                    style={{ background: '#10b981', color: 'white', padding: '5px 12px', fontWeight: '700', border: 'none', borderRadius: '6px', fontSize: '12px', cursor: isSaving ? 'not-allowed' : 'pointer' }}
+                    disabled={isSaving || isAutoSaving}
+                    title={isAutoSaving ? (t.estEdWaitAutoSave || 'Дождитесь сохранения сметы') : ''}
+                    style={{ background: '#10b981', color: 'white', padding: '5px 12px', fontWeight: '700', border: 'none', borderRadius: '6px', fontSize: '12px', cursor: (isSaving || isAutoSaving) ? 'not-allowed' : 'pointer' }}
                     onClick={openSubmitReviewModal}
                   >
                     {isSaving ? 'Отправка...' : (t.estEdSubmitReviewBtn || 'Отправить на утверждение')}
@@ -1958,11 +2078,22 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                       onClick={async () => {
                         if (!window.confirm(t.estEdApprovePlanConfirm || 'Утвердить эту плановую версию сметы? Все предыдущие утвержденные планы этого черновика будут деактивированы.')) return;
                         try {
-                          const res = await api.post(`/estimates/${activeDocId}/approve-plan`);
-                          alert(res.data.message);
-                          fetchData();
+                          setIsSaving(true);
+                          const res = await api.post(`/estimates/${activeDocId}/approve-plan`, {
+                            wbs: data?.wbs,
+                            works: data?.works,
+                            resources: data?.resources,
+                            coefficients: data?.coefficients,
+                            project_id: data?.doc?.project_id,
+                            region_id: data?.doc?.region_id || null,
+                            currency_id: data?.doc?.currency_id || null
+                          });
+                          alert(res.data.message || 'Плановая смета успешно утверждена');
+                          await fetchData();
                         } catch (e) {
                           alert(e.response?.data?.error || e.message);
+                        } finally {
+                          setIsSaving(false);
                         }
                       }}
                     >
@@ -1979,7 +2110,12 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                           return;
                         }
                         try {
-                          const res = await api.post(`/estimates/${activeDocId}/reject-plan`, { comment: reason.trim() });
+                          const res = await api.post(`/estimates/${activeDocId}/reject-plan`, {
+                            comment: reason.trim(),
+                            works: data?.works,
+                            resources: data?.resources,
+                            coefficients: data?.coefficients
+                          });
                           alert(res.data.message);
                           fetchData();
                         } catch (e) {
@@ -1998,24 +2134,6 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                   </span>
                 )}
               </>
-            )}
-
-            {onOpenScheduling && !isPlan && !isActual && (
-              <button
-                onClick={() => onOpenScheduling({
-                  projectId: data?.doc?.project_uuid || data?.doc?.projects?.id || null,
-                  objectId: data?.doc?.object_id || null,
-                  estimateId: docId
-                })}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  padding: '6px', background: '#16a34a', color: 'white',
-                  border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'background 0.2s'
-                }}
-                title={t.tabScheduling || 'Календарное планирование'}
-              >
-                <Calendar size={14} />
-              </button>
             )}
 
             {!isDocApproved && !isPlan && !isActual && (
@@ -2040,25 +2158,28 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                     {t.estEdHistoryBtn || 'История'}
                   </button>
                 )}
-                {!isReadOnlyDoc && (
+                {!isApproved && !isFinDirReviewing && (
                   <button className="btn-primary" style={{ background: 'white', border: '1.5px solid #3b82f6', color: '#3b82f6', padding: '4px 8px', cursor: 'pointer', display: 'inline-flex', borderRadius: '6px', fontWeight: '700', fontSize: '12px', alignItems: 'center', gap: '4px' }} onClick={() => setModalType('coeff')}>
                     <Percent size={12} /> {t.estEdCoeffsBtn || 'Коэффициенты'}
                   </button>
                 )}
-                {showPlanVersioning && (
+                {showPlanVersioning && (() => {
+                  const createPlanDisabled = versions.some(v => v.estimate_type === 'planned' && ['planned_formed', 'planned_review', 'planned_approved'].includes(v.status)) || isCreatingPlan || isAutoSaving;
+                  return (
                   <button
                     className="btn-primary"
                     style={{
-                      background: (versions.some(v => v.estimate_type === 'planned' && ['planned_formed', 'planned_review', 'planned_approved'].includes(v.status)) || isCreatingPlan) ? '#94a3b8' : '#8b5cf6',
+                      background: createPlanDisabled ? '#94a3b8' : '#8b5cf6',
                       color: 'white',
                       padding: '5px 12px',
                       fontWeight: '700',
                       fontSize: '12px',
                       border: 'none',
                       borderRadius: '6px',
-                      cursor: (versions.some(v => v.estimate_type === 'planned' && ['planned_formed', 'planned_review', 'planned_approved'].includes(v.status)) || isCreatingPlan) ? 'not-allowed' : 'pointer'
+                      cursor: createPlanDisabled ? 'not-allowed' : 'pointer'
                     }}
-                    disabled={versions.some(v => v.estimate_type === 'planned' && ['planned_formed', 'planned_review', 'planned_approved'].includes(v.status)) || isCreatingPlan}
+                    disabled={createPlanDisabled}
+                    title={isAutoSaving ? (t.estEdWaitAutoSave || 'Дождитесь сохранения сметы') : ''}
                     onClick={async () => {
                       if (!window.confirm(t.estEdCreatePlanConfirm || "Создать плановую версию сметы?")) return;
                       setIsCreatingPlan(true);
@@ -2077,37 +2198,38 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                   >
                     {isCreatingPlan ? 'Создание...' : (t.estEdCreatePlanBtn || 'Создать плановую версию')}
                   </button>
-                )}
+                  );
+                })()}
               </>
             )}
 
             {isDocApproved && (
-              <>
-                <button
-                  className="btn-primary"
-                  style={{ background: '#8b5cf6', padding: '5px 12px', fontWeight: '700', border: 'none', borderRadius: '6px', fontSize: '12px', color: 'white', cursor: 'pointer' }}
-                  onClick={async () => {
-                    const name = window.prompt('Название новой версии:', `${data?.doc?.project_id} (Версия)`);
-                    if (!name) return;
-                    setIsSaving(true);
-                    try {
-                      await api.post(`/estimates/${activeDocId}/create-version`, { version_name: name });
-                      alert('Новая версия создана!');
-                    } catch (err) {
-                      alert('Ошибка: ' + err.message);
-                    } finally { setIsSaving(false); }
-                  }}
-                >
-                  Создать версию
-                </button>
-                <button
-                  className="btn-secondary"
-                  style={{ background: '#f1f5f9', border: '1.5px solid #64748b', color: '#64748b', fontWeight: '700', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
-                  onClick={() => window.print()}
-                >
-                  Печать
-                </button>
-              </>
+              <button
+                className="btn-primary"
+                style={{ background: '#8b5cf6', padding: '5px 12px', fontWeight: '700', border: 'none', borderRadius: '6px', fontSize: '12px', color: 'white', cursor: 'pointer' }}
+                onClick={async () => {
+                  const name = window.prompt('Название новой версии:', `${data?.doc?.project_id} (Версия)`);
+                  if (!name) return;
+                  setIsSaving(true);
+                  try {
+                    await api.post(`/estimates/${activeDocId}/create-version`, { version_name: name });
+                    alert('Новая версия создана!');
+                  } catch (err) {
+                    alert('Ошибка: ' + err.message);
+                  } finally { setIsSaving(false); }
+                }}
+              >
+                Создать версию
+              </button>
+            )}
+            {(isDocApproved || isPlan || isActual) && (
+              <button
+                className="btn-secondary"
+                style={{ background: '#f1f5f9', border: '1.5px solid #64748b', color: '#64748b', fontWeight: '700', padding: '4px 8px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                onClick={() => window.print()}
+              >
+                Печать
+              </button>
             )}
           </div>
         </div>
@@ -2179,7 +2301,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
             <span style={{ color: '#10b981', fontWeight: '800' }}>
                 +{new Intl.NumberFormat('ru-RU').format(directCosts * c.value_percent / 100)} {CURRENCY}
             </span>
-            {!isApproved && (
+            {!isApproved && !isFinDirReviewing && (
                 <button
                     onClick={() => handleDeleteCoeff(c.id)}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#f87171', padding: '0', marginLeft: '4px', display: 'flex', alignItems: 'center' }}
@@ -2213,7 +2335,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
             style={{
               position: 'fixed',
               left: '8px',
-              top: `${(isHeaderHovered ? 120 : 50) + (showTotalsDashboard ? 95 : 0)}px`,
+              top: `${(isHeaderExpanded ? 120 : 50) + (showTotalsDashboard ? 95 : 0)}px`,
               width: isWbsSidebarHovered ? '280px' : '36px',
               transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
               background: 'white',
@@ -2224,7 +2346,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
               zIndex: 999,
               display: 'flex',
               flexDirection: 'column',
-              height: `calc(100vh - ${((isHeaderHovered ? 120 : 50) + (showTotalsDashboard ? 95 : 0)) + 20}px)`
+              height: `calc(100vh - ${((isHeaderExpanded ? 120 : 50) + (showTotalsDashboard ? 95 : 0)) + 20}px)`
             }}
           >
             {/* Sidebar Header - УМЕНЬШЕННАЯ ВЫСОТА И УВЕЛИЧЕННАЯ ДЛИНА */}
@@ -2380,33 +2502,27 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                   </button>
 
                   {/* White Add Button */}
-                  {!isApproved && (
+                  {!isApproved && !isFinDirReviewing && (
                     <button
                       className="btn-primary"
                       style={{ padding: '6px 14px', fontSize: '11px', background: 'white', color: '#2563eb', border: 'none', borderRadius: '20px', fontWeight: '900', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                       onClick={() => {
-                        // Кнопка "Работа" всегда активна по умолчанию при открытии
-                        let defaultType = 'work';
-                        let defaultParentId = '';
-                        if (selectedNodeId) {
-                          const selectedNode = data?.wbs?.find(n => n.id === selectedNodeId);
-                          if (selectedNode) {
-                            const selType = String(selectedNode.type).toLowerCase();
-                            if (selType === 'subconstruct' || selType === 'activity type' || selType === 'activity_type') {
-                              defaultParentId = selectedNode.id;
-                            }
-                          }
+                        // Добавлять работу можно только стоя на подконструктиве (конечный уровень
+                        // WBS) — иначе работа уходит не в тот раздел. Если уровень не тот (или
+                        // ничего не выбрано), показываем только предупреждение и НЕ открываем окно
+                        // добавления работы вообще — пока пользователь не встанет на подконструктив.
+                        const selectedNode = selectedNodeId ? data?.wbs?.find(n => n.id === selectedNodeId) : null;
+                        const selType = selectedNode ? String(selectedNode.type).toLowerCase() : '';
+                        const isOnSubconstruct = selType === 'subconstruct' || selType === 'activity type' || selType === 'activity_type';
+
+                        if (!isOnSubconstruct) {
+                          alert(t.msgSelectSubconstructForWork || 'Для добавления работы выберите подконструктив (конечный уровень структуры WBS).');
+                          return;
                         }
-                        if (!defaultParentId) {
-                          const firstSub = data?.wbs?.find(n => {
-                            const t = String(n.type).toLowerCase();
-                            return t === 'subconstruct' || t === 'activity type' || t === 'activity_type';
-                          });
-                          defaultParentId = firstSub?.id || '';
-                        }
+
                         setFormData({
-                          type: defaultType,
-                          parentId: defaultParentId,
+                          type: 'work',
+                          parentId: selectedNode.id,
                           nameType: 'standard',
                           standardName: '',
                           customName: '',
@@ -2451,9 +2567,9 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                         const isSelected = selectedNodeId === row.id;
                         const isExcluded = node.is_excluded;
                         const nodeSum = getWbsNodeSum(node);
-                        const nodeRevenue = nodeSum * MARGIN_MULTIPLIER;
-                        const nodeMargin = nodeRevenue - nodeSum;
-                        const nodeProfitability = nodeRevenue > 0 ? (nodeMargin / nodeRevenue) * 100 : 0;
+                        // Маржа = Доход - Расход; доходной версии сметы пока нет — маржа/рентабельность 0.
+                        const nodeMargin = 0;
+                        const nodeProfitability = 0;
 
                         let nodeIcon = '⚙️';
                         const lowerType = String(node.type).toLowerCase();
@@ -2526,7 +2642,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                               {nodeProfitability.toFixed(1)}%
                             </td>
                             <td style={{ textAlign: 'right', paddingRight: '12px' }}>
-                              {!isApproved && (
+                              {!isApproved && !isFinDirReviewing && (
                                 <button
                                   title={isExcluded ? "Вернуть в расчет" : "Исключить из расчета"}
                                   onClick={(e) => { e.stopPropagation(); handleToggleWbsExclusion(row.id, isExcluded); }}
@@ -2548,9 +2664,9 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                         const isExcluded = work.is_excluded;
                         const isActive = activeWorkId === work.id;
 
-                        const workRevenue = workAmount * MARGIN_MULTIPLIER;
-                        const workMargin = workRevenue - workAmount;
-                        const workProfitability = workRevenue > 0 ? (workMargin / workRevenue) * 100 : 0;
+                        // Маржа = Доход - Расход; доходной версии сметы пока нет — маржа/рентабельность 0.
+                        const workMargin = 0;
+                        const workProfitability = 0;
 
                         return (
                           <tr
@@ -2571,10 +2687,10 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                               <input
                                 type="checkbox"
                                 checked={!isExcluded}
-                                disabled={isApproved}
+                                disabled={isApproved || isFinDirReviewing}
                                 onChange={(e) => { e.stopPropagation(); handleToggleWorkExclusion(work.id, isExcluded); }}
                                 onClick={(e) => e.stopPropagation()}
-                                style={{ width: '15px', height: '15px', cursor: isApproved ? 'default' : 'pointer', accentColor: '#10b981' }}
+                                style={{ width: '15px', height: '15px', cursor: (isApproved || isFinDirReviewing) ? 'default' : 'pointer', accentColor: '#10b981' }}
                               />
                             </td>
                             <td style={{ color: '#94a3b8', fontSize: '12px', fontWeight: '700' }}>{row.code}</td>
@@ -2619,7 +2735,7 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                               {workProfitability.toFixed(1)}%
                             </td>
                             <td style={{ textAlign: 'right', paddingRight: '12px' }}>
-                              {!isApproved && (
+                              {!isApproved && !isFinDirReviewing && (
                                 <button
                                   onClick={(e) => { e.stopPropagation(); handleToggleWorkExclusion(work.id, isExcluded); }}
                                   title={isExcluded ? "Вернуть в расчет" : "Исключить из расчета"}
@@ -2721,8 +2837,10 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                     )}
                   </div>
 
-                  {/* Orange Gradient Add Resource Button */}
-                  {!isApproved && (
+                  {/* Orange Gradient Add Resource Button — только когда стоим на конкретной
+                      работе и открыта её детализация ресурсов (activeWorkId), иначе ресурс
+                      мог случайно уйти в первую попавшуюся работу. */}
+                  {!isApproved && !isFinDirReviewing && activeWorkId && (
                     <button
                       className="btn-primary"
                       style={{ padding: '6px 16px', fontSize: '11px', background: 'linear-gradient(135deg, #f59e0b 0%, #ea580c 100%)', border: 'none', borderRadius: '20px', fontWeight: '900', color: 'white', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px', boxShadow: '0 2px 8px rgba(234, 88, 12, 0.3)' }}
@@ -2774,9 +2892,9 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                                 <input
                                   type="checkbox"
                                   checked={!res.is_excluded}
-                                  disabled={isApproved}
+                                  disabled={isApproved || isFinDirReviewing}
                                   onChange={() => handleToggleResourceExclusion(res.id, res.is_excluded)}
-                                  style={{ width: '15px', height: '15px', cursor: isApproved ? 'default' : 'pointer', accentColor: '#10b981' }}
+                                  style={{ width: '15px', height: '15px', cursor: (isApproved || isFinDirReviewing) ? 'default' : 'pointer', accentColor: '#10b981' }}
                                 />
                               </td>
                               <td style={{ padding: '6px 4px', color: '#64748b', fontWeight: '700', fontSize: '12px' }}>
@@ -2860,13 +2978,15 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
                                     <button onClick={() => handleEditResource(res)} title="Изменить норму/кол-во" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '2px' }}>
                                       <Edit size={13} />
                                     </button>
-                                    <button
-                                      onClick={() => handleToggleResourceExclusion(res.id, res.is_excluded)}
-                                      title={res.is_excluded ? "Вернуть в расчет" : "Исключить из расчета"}
-                                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: res.is_excluded ? '#3b82f6' : '#f87171', padding: '2px' }}
-                                    >
-                                      {res.is_excluded ? <RotateCcw size={13} /> : <Trash2 size={13} />}
-                                    </button>
+                                    {!isFinDirReviewing && (
+                                      <button
+                                        onClick={() => handleToggleResourceExclusion(res.id, res.is_excluded)}
+                                        title={res.is_excluded ? "Вернуть в расчет" : "Исключить из расчета"}
+                                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: res.is_excluded ? '#3b82f6' : '#f87171', padding: '2px' }}
+                                      >
+                                        {res.is_excluded ? <RotateCcw size={13} /> : <Trash2 size={13} />}
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                               </td>
@@ -2949,172 +3069,36 @@ function EstimateEditor({ docId, userRole = 'admin', currentUserId = null, resou
       )}
 
       {modalType === 'add-wbs-element' && (
-        <Modal 
-          title={formData.type === 'work' ? (t.btnAddWork || 'Добавить работу') : (t.btnAddStructureElement || 'Добавить элемент структуры')} 
-          onClose={() => { setModalType(null); setSelectedWorkId(null); setWorkSearchQuery(''); }} 
-          onSubmit={formData.type === 'work' ? handleAddWorkElement : handleAddWbsElement} 
+        <Modal
+          title={t.btnAddWork || 'Добавить работу'}
+          onClose={() => { setModalType(null); setSelectedWorkId(null); setWorkSearchQuery(''); }}
+          onSubmit={handleAddWorkElement}
           isSaving={isSaving}
-          style={formData.type === 'work' ? { maxWidth: '850px', width: '90%' } : {}}
+          style={{ maxWidth: '850px', width: '90%' }}
         >
-          {/* 1. Выбор типа элемента */}
+          {/* Подконструктив, в который добавляется работа (уже выбран деревом слева) */}
           <div style={{ marginBottom: '15px' }}>
-            <label style={{ fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '8px', display: 'block' }}>
-              {t.lblWhatToAdd || 'Что добавить?'}
+            <label style={{ fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '5px', display: 'block' }}>
+              {t.lblSubconstructive || 'Подконструктив:'}
             </label>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {[
-                { value: 'construct', label: t.estConstructive || 'Конструктив' },
-                { value: 'subconstruct', label: t.estSubconstructive || 'Подконструктив' },
-                { value: 'work', label: t.estWork || 'Работа' }
-              ].map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => {
-                    let parentId = '';
-                    if (opt.value === 'subconstruct') {
-                      const firstConst = data?.wbs?.find(n => {
-                        const t = String(n.type).toLowerCase();
-                        return t === 'construct' || t === 'activity group' || t === 'activity_group';
-                      });
-                      parentId = firstConst?.id || '';
-                    } else if (opt.value === 'work') {
-                      const firstSub = data?.wbs?.find(n => {
-                        const t = String(n.type).toLowerCase();
-                        return t === 'subconstruct' || t === 'activity type' || t === 'activity_type';
-                      });
-                      parentId = firstSub?.id || '';
-                    }
-                    setFormData(prev => ({
-                      ...prev,
-                      type: opt.value,
-                      parentId,
-                      nameType: 'standard',
-                      standardName: '',
-                      customName: ''
-                    }));
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    border: '1px solid #cbd5e1',
-                    background: formData.type === opt.value ? '#3b82f6' : 'white',
-                    color: formData.type === opt.value ? 'white' : '#475569',
-                    fontWeight: '700',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+            <select
+              style={{ width: '100%', padding: '10px', borderRadius: '10px', border: '2px solid #e2e8f0', fontWeight: 'bold', outline: 'none' }}
+              value={formData.parentId || ''}
+              onChange={e => setFormData({ ...formData, parentId: e.target.value })}
+            >
+              <option value="">-- {t.placeholderSelectParent || 'Выберите родительский элемент (необязательно)'} --</option>
+              {data?.wbs
+                ?.filter(n => {
+                  const t = String(n.type).toLowerCase();
+                  return t === 'subconstruct' || t === 'activity type' || t === 'activity_type';
+                })
+                .map(n => (
+                  <option key={n.id} value={n.id}>{n[`name_${currentLang}`] || n.name_ka || n.name_en || n.name_az || n.name_ru || n.name}</option>
+                ))}
+            </select>
           </div>
 
-          {/* 2. Выбор родительского элемента (только для Конструктивов, Подконструкций и Работ) */}
-          {(formData.type === 'construct' || formData.type === 'subconstruct' || formData.type === 'work') && (
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '5px', display: 'block' }}>
-                {formData.type === 'construct' && ('Родительский Пакет работ:')}
-                {formData.type === 'subconstruct' && (t.lblConstructive || 'Конструктив:')}
-                {formData.type === 'work' && (t.lblSubconstructive || 'Подконструктив:')}
-              </label>
-              <select
-                style={{ width: '100%', padding: '10px', borderRadius: '10px', border: '2px solid #e2e8f0', fontWeight: 'bold', outline: 'none' }}
-                value={formData.parentId || ''}
-                onChange={e => setFormData({ ...formData, parentId: e.target.value })}
-              >
-                <option value="">-- {t.placeholderSelectParent || 'Выберите родительский элемент (необязательно)'} --</option>
-                {data?.wbs
-                  ?.filter(n => {
-                    const t = String(n.type).toLowerCase();
-                    if (formData.type === 'construct') return t === 'work_package' || t === 'work package';
-                    if (formData.type === 'subconstruct') return t === 'construct' || t === 'activity group' || t === 'activity_group';
-                    if (formData.type === 'work') return t === 'subconstruct' || t === 'activity type' || t === 'activity_type';
-                    return false;
-                  })
-                  .map(n => (
-                    <option key={n.id} value={n.id}>{n[`name_${currentLang}`] || n.name_ka || n.name_en || n.name_az || n.name_ru || n.name}</option>
-                  ))}
-              </select>
-            </div>
-          )}
-
-          {/* 3. Ввод имени (для WBS элементов) */}
-          {formData.type === 'construct' && (
-            <div style={{ marginBottom: '15px' }}>
-              <label style={{ fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '8px', display: 'block' }}>
-                {t.lblConstructive || 'Название Конструктива:'}
-              </label>
-              <input
-                type="text"
-                placeholder={t.placeholderConstructName || "Напр: Земляные работы / Фундамент"}
-                autoFocus
-                style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '2px solid #e2e8f0', boxSizing: 'border-box', outline: 'none', fontWeight: '600' }}
-                value={formData.customName || ''}
-                onChange={e => setFormData({ ...formData, customName: e.target.value, nameType: 'custom' })}
-              />
-            </div>
-          )}
-
-          {formData.type === 'subconstruct' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              <div>
-                <label style={{ fontSize: '12px', color: '#64748b', fontWeight: '700', marginBottom: '8px', display: 'block' }}>
-                  {t.lblSelectOrEnterName || 'Выберите из справочника или укажите новый:'}
-                </label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        name="nameType"
-                        checked={formData.nameType === 'standard'}
-                        onChange={() => setFormData({ ...formData, nameType: 'standard' })}
-                      />
-                      {t.lblFromTemplate || 'Из шаблона'}
-                    </label>
-                    <label style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-                      <input
-                        type="radio"
-                        name="nameType"
-                        checked={formData.nameType === 'custom'}
-                        onChange={() => setFormData({ ...formData, nameType: 'custom' })}
-                      />
-                      {t.lblNew || 'Новый'}
-                    </label>
-                  </div>
-                  {formData.nameType === 'standard' ? (
-                    <select
-                      style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '2px solid #e2e8f0', background: 'white', fontWeight: 'bold' }}
-                      value={formData.standardName || ''}
-                      onChange={e => setFormData({ ...formData, standardName: e.target.value })}
-                    >
-                      <option value="">-- {t.placeholderSelectStandard || 'Выберите из справочника'} --</option>
-                      {(Array.isArray(wbsTemplates) ? wbsTemplates : [])
-                        .filter(temp => temp && temp.code && temp.code.includes('.'))
-                        .map((temp, idx) => {
-                          const name = temp[`name_${currentLang}`] || temp.name_ru || temp.name || temp.code;
-                          return <option key={idx} value={name}>{name}</option>;
-                        })}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      placeholder={t.placeholderSubconstructName || "Напр: Разработка грунта"}
-                      autoFocus
-                      style={{ width: '100%', padding: '12px', borderRadius: '12px', border: '2px solid #e2e8f0', boxSizing: 'border-box', outline: 'none' }}
-                      value={formData.customName || ''}
-                      onChange={e => setFormData({ ...formData, customName: e.target.value })}
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 4. Выбор работы и ввод объема (для типа work) */}
+          {/* Выбор работы и ввод объема */}
           {formData.type === 'work' && (
             <>
               {selectedWorkId ? (

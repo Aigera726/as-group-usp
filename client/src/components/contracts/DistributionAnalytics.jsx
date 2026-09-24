@@ -115,12 +115,23 @@ export default function DistributionAnalytics({ api, projects, selectedProjectId
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('works'); // works | resources
+  const [contractorsList, setContractorsList] = useState([]);
+  const [contractorFilter, setContractorFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  useEffect(() => {
+    api.get('/contracts/contractors').then(r => setContractorsList(r.data || [])).catch(() => {});
+  }, []);
 
   const loadData = () => {
     if (!selectedProjectId) return;
     setLoading(true);
     const params = { project_id: selectedProjectId };
     if (selectedObjectId) params.object_id = selectedObjectId;
+    if (contractorFilter) params.contractor_id = contractorFilter;
+    if (dateFrom) params.date_from = dateFrom;
+    if (dateTo) params.date_to = dateTo;
     api.get('/contracts/distribution-summary', { params })
       .then(r => setData(r.data))
       .catch(() => {})
@@ -129,7 +140,7 @@ export default function DistributionAnalytics({ api, projects, selectedProjectId
 
   useEffect(() => {
     loadData();
-  }, [selectedProjectId, selectedObjectId]);
+  }, [selectedProjectId, selectedObjectId, contractorFilter, dateFrom, dateTo]);
 
   // Aggregate by contractor
   const contractorMap = {};
@@ -153,6 +164,33 @@ export default function DistributionAnalytics({ api, projects, selectedProjectId
 
   return (
     <div>
+      {/* Filters: contractor + period */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'end', marginBottom: 20, flexWrap: 'wrap' }}>
+        <div>
+          <label style={styles.label}>Подрядчик</label>
+          <select style={{ ...styles.select, minWidth: 200 }} value={contractorFilter} onChange={e => setContractorFilter(e.target.value)}>
+            <option value="">Все подрядчики</option>
+            {contractorsList.map(c => <option key={c.id} value={c.id}>{c.company_name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={styles.label}>Период с</label>
+          <input type="date" style={styles.select} value={dateFrom} onChange={e => setDateFrom(e.target.value)} />
+        </div>
+        <div>
+          <label style={styles.label}>Период по</label>
+          <input type="date" style={styles.select} value={dateTo} onChange={e => setDateTo(e.target.value)} />
+        </div>
+        {(contractorFilter || dateFrom || dateTo) && (
+          <button
+            onClick={() => { setContractorFilter(''); setDateFrom(''); setDateTo(''); }}
+            style={{ padding: '11px 16px', borderRadius: 12, border: '1.5px solid #e2e8f0', background: '#fff', color: '#64748b', fontWeight: 700, cursor: 'pointer' }}
+          >
+            Сбросить фильтры
+          </button>
+        )}
+      </div>
+
       {loading ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 60, color: '#94a3b8' }}>
           <Loader size={20} style={{ animation: 'spin 1s linear infinite' }} /> Загрузка аналитики...

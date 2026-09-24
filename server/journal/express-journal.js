@@ -37,6 +37,7 @@
 'use strict';
 
 const audit = require('./audit-client');
+const journalDiff = require('./journal-diff');
 
 const ACTION_BY_METHOD = {
   POST: 'CREATE',
@@ -206,6 +207,76 @@ function pick(payload, keys) {
   return '';
 }
 
+/**
+ * Запомненные названия объектов: идентификатор -> название.
+ *
+ * Зачем. В журнале Смет колонка «Объект» показывала UUID проекта - «нормальное
+ * название, а не айди» было первым, что про неё сказали. Название у модуля
+ * есть, но приходит оно не тогда, когда нужно: при правке документа ответ
+ * возвращает результат операции, а не карточку с именем.
+ *
+ * Откуда берём. Из любого ответа, который модуль и так отдаёт: открыл список
+ * проектов - в нём имена всех, открыл карточку - имя одного. Кеш наполняется
+ * собственным трафиком модуля и ничего не стоит: ни одного лишнего запроса к
+ * базе, только разбор уже полученного ответа.
+ *
+ * Чего не делаем. Не ходим за именем сами. Журнал не имеет права добавлять
+ * модулю запросов - это ровно то «торможение», которого просили избежать.
+ * Имени нет - событие уходит с одним идентификатором, и это честно.
+ */
+const NAME_CACHE_LIMIT = 5000;
+const nameCache = new Map();
+
+function rememberName(id, name) {
+  const key = String(id || '').trim();
+  const value = String(name || '').trim();
+  if (!key || !value || key === value) return;
+  // Идентификаторы попадаются и числовые, и UUID - годятся оба. А вот имя
+  // длиной с абзац это уже не имя, а текст документа.
+  if (value.length > 200) return;
+  if (nameCache.size >= NAME_CACHE_LIMIT) {
+    // Вычищаем четверть самых старых: Map хранит порядок вставки.
+    let drop = Math.floor(NAME_CACHE_LIMIT / 4);
+    for (const existing of nameCache.keys()) {
+      nameCache.delete(existing);
+      if (--drop <= 0) break;
+    }
+  }
+  nameCache.set(key, value);
+}
+
+function rememberedName(id) {
+  return nameCache.get(String(id || '').trim()) || '';
+}
+
+/**
+ * Проходит по ответу и запоминает пары «идентификатор - название».
+ *
+ * Глубина ограничена намеренно: ответы модулей бывают с вложенными позициями
+ * на несколько экранов, и полный обход стоил бы заметного времени на каждом
+ * запросе. Двух уровней хватает на список объектов и на карточку с вложенным
+ * списком.
+ */
+function harvestNames(payload, depth = 0) {
+  if (!payload || depth > 2) return;
+  if (Array.isArray(payload)) {
+    // Список целиком обходить незачем: страница списка и так отдаёт первые
+    // десятки, а дальше идёт хвост, который в журнал в ближайшее время не
+    // попадёт.
+    for (const item of payload.slice(0, 200)) harvestNames(item, depth + 1);
+    return;
+  }
+  if (typeof payload !== 'object') return;
+
+  const id = pick(payload, ID_KEYS);
+  const name = pick(payload, TITLE_KEYS) || pick(payload, NUMBER_KEYS);
+  if (id && name) rememberName(id, name);
+
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === 'object') harvestNames(value, depth + 1);
+  }
+}
+
 function describeAnswer(payload) {
   // Ответ бывает обёрнут: {data: {...}} или {document: {...}}.
   let target = payload;
@@ -293,6 +364,10 @@ function createJournalMiddleware(options) {
         entityType: route.entityType,
         action,
         entityId: route.idGroup ? String(match[route.idGroup] || '') : '',
+        // Человеческое название действия. Без него в ячейке «что произошло»
+        // стоял адрес обработчика - «PUT /api/v1/unification-fields/job», - и
+        // на вопрос «что произошло» журнал отвечал маршрутом.
+        title: typeof route.title === 'function' ? route.title(match) : route.title || '',
       };
     }
     return null;
@@ -434,6 +509,15 @@ function createJournalMiddleware(options) {
     const originalJson = res.json.bind(res);
     res.json = (payload) => {
       answer = payload;
+      // Имена запоминаются из **любого** ответа, даже если само событие в
+      // журнал не идёт: открытый список проектов наполняет кеш именами, и
+      // следующая правка любого из них уйдёт в журнал уже с названием, а не с
+      // одним идентификатором.
+      try {
+        harvestNames(payload);
+      } catch {
+        /* разбор имён не имеет права ломать ответ */
+      }
       return originalJson(payload);
     };
 
@@ -456,8 +540,18 @@ function createJournalMiddleware(options) {
         // (номер из ответа). Тело уже разобрано express.json() до нас, так что
         // читать поток не нужно - это бесплатно.
         const isRead = req.method === 'GET';
-        const submitted = isRead ? [] : fieldsFromBody(req.body, fieldLabels);
+        let submitted = isRead ? [] : fieldsFromBody(req.body, fieldLabels);
+        // Настоящая разница «было → стало», снятая обёрткой клиента базы.
+        // По §3.4 ТЗ она обязательна, поэтому побеждает присланные значения:
+        // submitted остаётся там, где «до» получить не вышло.
+        const measured = journalDiff.collected();
+        if (measured.length) submitted = measured;
         const described2 = outcome === 'success' ? describeAnswer(answer) : {};
+        // Название объекта: из ответа, а если там его нет - из запомненных.
+        // Именно этот случай и давал «непонятные проекты»: правка возвращает
+        // результат операции, а не карточку с именем.
+        const knownId = described.entityId || described2.entityId || '';
+        const title = described2.entityTitle || rememberedName(knownId);
         const why = outcome === 'success' ? '' : reasonFromAnswer(answer);
 
         const target = described || {
@@ -471,12 +565,15 @@ function createJournalMiddleware(options) {
           actionType: target.action,
           entityId: target.entityId || described2.entityId || '',
           entityNumber: described2.entityNumber || '',
-          entityTitle: described2.entityTitle || '',
+          entityTitle: title,
           changes: submitted,
           result: outcome,
           resultReason: why,
           source: 'api',
-          comment: `${req.method} ${(req.originalUrl || req.url || '').split('?')[0]}`,
+          // Человеческое название, если маршрут его дал. Адрес обработчика -
+          // запасной вариант: он нужен при разборе инцидента, но это не ответ
+          // на «что произошло», и интерфейс журнала показывает его подписью.
+          comment: described.title || `${req.method} ${(req.originalUrl || req.url || '').split('?')[0]}`,
           ipAddress: req.ip || req.socket?.remoteAddress || '',
           userAgent: req.headers?.['user-agent'] || '',
           ...actorFrom(req),
@@ -486,7 +583,11 @@ function createJournalMiddleware(options) {
       }
     });
 
-    return next();
+    // Сбор разницы живёт ровно столько, сколько идёт запрос.
+    //
+    // AsyncLocalStorage, а не переменная модуля: запросы выполняются
+    // вперемешку, и общая переменная перемешала бы изменения разных людей.
+    return journalDiff.withCollector(() => next());
   }
 
   middleware.describe = describe;

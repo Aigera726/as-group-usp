@@ -19,11 +19,33 @@ export default function GpmPage({ api, lang, t, userRole }) {
   const [objects, setObjects] = useState([]);
   const [selectedObjectId, setSelectedObjectId] = useState('');
 
-  const [activeSubTab, setActiveSubTab] = useState('materials'); // 'materials' | 'machinery'
+  const isSiteManager = userRole === 'site_manager';
+  const [activeSubTab, setActiveSubTab] = useState(isSiteManager ? 'purchase_request' : 'materials'); // 'materials' | 'machinery' | 'purchase_request'
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [estimateType, setEstimateType] = useState('');
+
+  const canManagePurchaseRequests = userRole === 'admin' || userRole === 'site_manager';
+
+  // Purchase request (Заявка на закуп) states — плоский список поданных заявок + модалка создания
+  const [purchaseRequestsList, setPurchaseRequestsList] = useState([]);
+  const [purchaseListLoading, setPurchaseListLoading] = useState(false);
+  const [purchaseListError, setPurchaseListError] = useState('');
+
+  const [showCreateRequestModal, setShowCreateRequestModal] = useState(false);
+  const [modalProjectId, setModalProjectId] = useState('');
+  const [modalMaterials, setModalMaterials] = useState([]);
+  const [modalMaterialsLoading, setModalMaterialsLoading] = useState(false);
+  const [modalDraftItems, setModalDraftItems] = useState([]); // [{doc_resource_id, name, unit, remaining_quantity, quantity}]
+  const [purchaseSubmitting, setPurchaseSubmitting] = useState(false);
+  const [purchaseSubmitError, setPurchaseSubmitError] = useState('');
+
+  const [showAddMaterialModal, setShowAddMaterialModal] = useState(false);
+  const [addMaterialSearch, setAddMaterialSearch] = useState('');
+  const [addMaterialSelected, setAddMaterialSelected] = useState(null);
+  const [addMaterialQty, setAddMaterialQty] = useState('');
+  const [addMaterialError, setAddMaterialError] = useState('');
 
   // Validation flags
   const [hasActualEstimate, setHasActualEstimate] = useState(true);
@@ -78,6 +100,7 @@ export default function GpmPage({ api, lang, t, userRole }) {
 
   // 3. Load Materials / Machinery when Project, Object, estimateType or Tab changes
   useEffect(() => {
+    if (activeSubTab === 'purchase_request') return;
     if (!selectedProjectId || !selectedObjectId || !estimateType) {
       setMaterials([]);
       setMachinery([]);
@@ -85,6 +108,95 @@ export default function GpmPage({ api, lang, t, userRole }) {
     }
     refreshData();
   }, [selectedProjectId, selectedObjectId, estimateType, activeSubTab]);
+
+  // 3b. Заявка на закуп — плоский список поданных заявок, не зависит от верхних селекторов
+  useEffect(() => {
+    if (activeSubTab !== 'purchase_request') return;
+    refreshPurchaseRequestsList();
+  }, [activeSubTab]);
+
+  const refreshPurchaseRequestsList = () => {
+    setPurchaseListLoading(true);
+    setPurchaseListError('');
+    api.get('/gpm/purchase-requests')
+      .then(res => setPurchaseRequestsList(res.data || []))
+      .catch(err => setPurchaseListError(err.response?.data?.error || err.message))
+      .finally(() => setPurchaseListLoading(false));
+  };
+
+  // Открыть модалку создания заявки
+  const handleOpenCreateRequestModal = () => {
+    setModalProjectId('');
+    setModalMaterials([]);
+    setModalDraftItems([]);
+    setPurchaseSubmitError('');
+    setShowCreateRequestModal(true);
+  };
+
+  // Загрузка материалов проекта при выборе проекта в модалке создания заявки
+  useEffect(() => {
+    if (!showCreateRequestModal || !modalProjectId) {
+      setModalMaterials([]);
+      return;
+    }
+    setModalMaterialsLoading(true);
+    api.get('/gpm/purchase-requests/materials', { params: { project_id: modalProjectId } })
+      .then(res => setModalMaterials(res.data?.items || []))
+      .catch(err => setPurchaseSubmitError(err.response?.data?.error || err.message))
+      .finally(() => setModalMaterialsLoading(false));
+  }, [modalProjectId, showCreateRequestModal]);
+
+  const handleOpenAddMaterialModal = () => {
+    setAddMaterialSearch('');
+    setAddMaterialSelected(null);
+    setAddMaterialQty('');
+    setAddMaterialError('');
+    setShowAddMaterialModal(true);
+  };
+
+  const handleConfirmAddMaterial = () => {
+    if (!addMaterialSelected) return;
+    const qty = parseFloat(addMaterialQty);
+    if (isNaN(qty) || qty <= 0) {
+      setAddMaterialError(t.gpmPurchaseEnterQty || 'Укажите количество больше 0');
+      return;
+    }
+    if (qty > addMaterialSelected.remaining_quantity) {
+      setAddMaterialError(`${t.gpmPurchaseOverflowHint || 'Не больше'} ${addMaterialSelected.remaining_quantity}`);
+      return;
+    }
+    setModalDraftItems(prev => [...prev, {
+      doc_resource_id: addMaterialSelected.doc_resource_id,
+      name: addMaterialSelected.name,
+      unit: addMaterialSelected.unit,
+      remaining_quantity: addMaterialSelected.remaining_quantity,
+      quantity: qty
+    }]);
+    setShowAddMaterialModal(false);
+  };
+
+  const handleRemoveDraftItem = (docResourceId) => {
+    setModalDraftItems(prev => prev.filter(it => it.doc_resource_id !== docResourceId));
+  };
+
+  const handleSubmitPurchaseRequest = () => {
+    if (modalDraftItems.length === 0) {
+      setPurchaseSubmitError(t.gpmPurchaseNoItems || 'Добавьте хотя бы один материал в заявку');
+      return;
+    }
+    setPurchaseSubmitting(true);
+    setPurchaseSubmitError('');
+    api.post('/gpm/purchase-requests', {
+      project_id: modalProjectId,
+      items: modalDraftItems.map(it => ({ doc_resource_id: it.doc_resource_id, quantity: it.quantity }))
+    })
+      .then(() => {
+        setShowCreateRequestModal(false);
+        refreshPurchaseRequestsList();
+      })
+      .catch(err => setPurchaseSubmitError(err.response?.data?.error || err.message))
+      .finally(() => setPurchaseSubmitting(false));
+  };
 
   const refreshData = () => {
     setLoading(true);
@@ -218,7 +330,10 @@ export default function GpmPage({ api, lang, t, userRole }) {
     return resPeak;
   }, [filteredMachinery]);
 
-  const showContent = selectedProjectId !== '' && selectedObjectId !== '' && estimateType !== '';
+  const showTabs = activeSubTab === 'purchase_request' ? true : selectedProjectId !== '';
+  const showContent = activeSubTab === 'purchase_request'
+    ? selectedProjectId !== ''
+    : selectedProjectId !== '' && selectedObjectId !== '' && estimateType !== '';
 
   const getPageTitle = () => {
     return t.gpmPageTitle || 'График потребности в материалах';
@@ -255,6 +370,7 @@ export default function GpmPage({ api, lang, t, userRole }) {
         </h1>
       </div>
 
+      {activeSubTab !== 'purchase_request' && (
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1fr 1fr 1fr',
@@ -320,8 +436,9 @@ export default function GpmPage({ api, lang, t, userRole }) {
           </select>
         </div>
       </div>
+      )}
 
-      {!showContent ? (
+      {!showTabs ? (
         <div style={{
           display: 'flex',
           flexDirection: 'column',
@@ -344,7 +461,8 @@ export default function GpmPage({ api, lang, t, userRole }) {
         </div>
       ) : (
         <>
-          {/* ── ТАБЫ: МАТЕРИАЛЫ / ТЕХНИКА ── */}
+          {/* ── ТАБЫ: МАТЕРИАЛЫ / ТЕХНИКА / ЗАЯВКА НА ЗАКУП ── */}
+          {!isSiteManager && (
           <div style={{ display: 'flex', gap: 8, marginBottom: 24, borderBottom: '1px solid #e2e8f0', paddingBottom: 12 }}>
             <button
               onClick={() => setActiveSubTab('materials')}
@@ -373,8 +491,298 @@ export default function GpmPage({ api, lang, t, userRole }) {
               <Truck size={16} />
               {t.gpmTabMachinery || 'Планирование техники'}
             </button>
-          </div>
 
+            {canManagePurchaseRequests && (
+              <button
+                onClick={() => setActiveSubTab('purchase_request')}
+                style={{
+                  padding: '10px 20px', borderRadius: 12, fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+                  border: 'none',
+                  background: activeSubTab === 'purchase_request' ? '#3b82f6' : 'transparent',
+                  color: activeSubTab === 'purchase_request' ? '#fff' : '#64748b',
+                  transition: 'all .2s'
+                }}
+              >
+                <Package size={16} />
+                {t.gpmTabPurchaseRequest || 'Заявка на закуп'}
+              </button>
+            )}
+          </div>
+          )}
+
+          {activeSubTab === 'purchase_request' ? (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>
+                  {t.gpmPurchaseRequestsListTitle || 'Заявки'}
+                </h2>
+                <button
+                  onClick={handleOpenCreateRequestModal}
+                  style={{ padding: '10px 20px', borderRadius: 12, fontWeight: 700, fontSize: 14, border: 'none', background: '#3b82f6', color: '#fff', cursor: 'pointer' }}
+                >
+                  {t.gpmPurchaseCreateBtn || 'Создать заявку'}
+                </button>
+              </div>
+
+              {purchaseListError && (
+                <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 14, padding: '14px 18px', marginBottom: 20, color: '#dc2626', fontSize: 14, display: 'flex', gap: 8 }}>
+                  <AlertCircle size={18} /> {purchaseListError}
+                </div>
+              )}
+
+              {purchaseListLoading ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, padding: 80, color: '#94a3b8' }}>
+                  <Loader size={24} style={{ animation: 'spin 1s linear infinite' }} /> {t.gpmLoadingData || 'Загрузка данных...'}
+                </div>
+              ) : purchaseRequestsList.length === 0 ? (
+                <div style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                  padding: '80px 40px', background: '#ffffff', borderRadius: 16, border: '1px solid #e2e8f0', textAlign: 'center'
+                }}>
+                  <Package size={48} color="#3b82f6" style={{ marginBottom: 16, background: '#eff6ff', padding: 12, borderRadius: 16 }} />
+                  <div style={{ fontSize: 14, color: '#64748b' }}>{t.gpmPurchaseNoHistory || 'Заявок пока нет'}</div>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {purchaseRequestsList.map(item => (
+                    <div key={item.id} style={{ background: '#fff', borderRadius: 16, border: '1px solid #f1f5f9', padding: '16px 20px', boxShadow: '0 2px 8px rgba(0,0,0,.03)' }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 4 }}>{item.material_name}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>{new Date(item.created_at).toLocaleString('ru-RU')}</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', marginBottom: 2 }}>{t.lblProject || 'Проект'}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{item.project_name || '—'}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', marginBottom: 2 }}>{t.gpmPurchaseColOrderQty || 'Заказано'}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{item.quantity.toLocaleString('ru-RU')} {item.unit}</div>
+                        </div>
+                      </div>
+                      {item.comment && (
+                        <div style={{ marginTop: 10, fontSize: 12, color: '#64748b' }}>{item.comment}</div>
+                      )}
+                      <div style={{ marginTop: 10, fontSize: 11, color: '#94a3b8' }}>{item.created_by_name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* ── МОДАЛКА: СОЗДАТЬ ЗАЯВКУ ── */}
+              {showCreateRequestModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 9999, paddingTop: '5vh', overflowY: 'auto' }}>
+                  <div style={{ width: '100%', maxWidth: 560, background: 'white', padding: '24px 28px', borderRadius: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,.15)', marginBottom: '5vh' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                      <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>{t.gpmPurchaseCreateModalTitle || 'Создать заявку'}</h3>
+                    </div>
+
+                    <div style={{ marginBottom: 16 }}>
+                      <label style={labelStyle}>{t.lblProject || 'Проект'}*</label>
+                      <select
+                        style={selectStyle}
+                        value={modalProjectId}
+                        onChange={e => { setModalProjectId(e.target.value); setModalDraftItems([]); }}
+                      >
+                        <option value="">-- {t.lblSelectProject || 'Выберите проект'} --</option>
+                        {projects.map(p => (
+                          <option key={p.id} value={p.id}>{p.code ? `[${p.code}] ` : ''}{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {purchaseSubmitError && (
+                      <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 12, padding: '10px 14px', marginBottom: 16, color: '#dc2626', fontSize: 13, fontWeight: 600 }}>
+                        {purchaseSubmitError}
+                      </div>
+                    )}
+
+                    {modalDraftItems.length === 0 ? (
+                      <button
+                        onClick={handleOpenAddMaterialModal}
+                        disabled={!modalProjectId}
+                        style={{
+                          width: '100%', padding: '12px', borderRadius: 12, fontWeight: 700, fontSize: 14,
+                          border: 'none', background: modalProjectId ? '#eff6ff' : '#f1f5f9', color: modalProjectId ? '#3b82f6' : '#94a3b8',
+                          cursor: modalProjectId ? 'pointer' : 'not-allowed'
+                        }}
+                      >
+                        {t.gpmPurchaseAddMaterialBtn || 'Добавить материал'}
+                      </button>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>
+                            {(t.gpmPurchaseMaterialsCount || 'Материалы')}: {modalDraftItems.length}
+                          </div>
+                          <button
+                            onClick={handleOpenAddMaterialModal}
+                            style={{ padding: '6px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12, border: 'none', background: '#eff6ff', color: '#3b82f6', cursor: 'pointer' }}
+                          >
+                            {t.gpmPurchaseAddMoreBtn || 'Добавить'}
+                          </button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+                          {modalDraftItems.map(it => (
+                            <div key={it.doc_resource_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: '#f8fafc', borderRadius: 10 }}>
+                              <div>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: '#1e293b' }}>{it.name}</div>
+                                <div style={{ fontSize: 12, color: '#64748b' }}>{it.quantity.toLocaleString('ru-RU')} {it.unit}</div>
+                              </div>
+                              <button
+                                onClick={() => handleRemoveDraftItem(it.doc_resource_id)}
+                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', padding: 6 }}
+                                title={t.gpmPurchaseRemoveItem || 'Удалить'}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+                      <button
+                        onClick={() => setShowCreateRequestModal(false)}
+                        disabled={purchaseSubmitting}
+                        style={{ flex: 1, background: '#f1f5f9', border: 'none', padding: 12, borderRadius: 12, fontWeight: 700, cursor: 'pointer', color: '#64748b' }}
+                      >
+                        {t.btnCancel || 'Отменить'}
+                      </button>
+                      <button
+                        onClick={handleSubmitPurchaseRequest}
+                        disabled={purchaseSubmitting || modalDraftItems.length === 0}
+                        style={{
+                          flex: 1, borderRadius: 12, fontWeight: 700, border: 'none', padding: 12,
+                          background: (purchaseSubmitting || modalDraftItems.length === 0) ? '#94a3b8' : '#3b82f6', color: '#fff',
+                          cursor: (purchaseSubmitting || modalDraftItems.length === 0) ? 'not-allowed' : 'pointer'
+                        }}
+                      >
+                        {purchaseSubmitting ? (t.gpmPurchaseSubmitting || 'Отправка...') : (t.gpmPurchaseSubmit || 'Отправить')}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── МОДАЛКА: ДОБАВИТЬ МАТЕРИАЛ (поверх модалки создания заявки) ── */}
+              {showAddMaterialModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.4)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 10000, paddingTop: '5vh', overflowY: 'auto' }}>
+                  <div style={{ width: '100%', maxWidth: 480, background: 'white', padding: '24px 28px', borderRadius: 24, boxShadow: '0 25px 50px -12px rgba(0,0,0,.15)', marginBottom: '5vh' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                      <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#1e293b' }}>{t.gpmPurchaseAddMaterialBtn || 'Добавить материал'}</h3>
+                    </div>
+
+                    {addMaterialError && (
+                      <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 12, padding: '10px 14px', marginBottom: 16, color: '#dc2626', fontSize: 13, fontWeight: 600 }}>
+                        {addMaterialError}
+                      </div>
+                    )}
+
+                    {!addMaterialSelected ? (
+                      <>
+                        <div style={{ position: 'relative', marginBottom: 14 }}>
+                          <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder={t.gpmPurchaseSearchPlaceholder || 'Поиск по названию'}
+                            value={addMaterialSearch}
+                            onChange={e => setAddMaterialSearch(e.target.value)}
+                            style={{ width: '100%', padding: '10px 12px 10px 34px', fontSize: 13, borderRadius: 10, border: '1px solid #cbd5e1', outline: 'none', boxSizing: 'border-box' }}
+                          />
+                        </div>
+
+                        {modalMaterialsLoading ? (
+                          <div style={{ textAlign: 'center', padding: 30, color: '#94a3b8' }}>
+                            <Loader size={20} style={{ animation: 'spin 1s linear infinite' }} />
+                          </div>
+                        ) : (
+                          <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {modalMaterials
+                              .filter(m => !modalDraftItems.some(it => it.doc_resource_id === m.doc_resource_id))
+                              .filter(m => m.name.toLowerCase().includes(addMaterialSearch.toLowerCase()))
+                              .map(m => (
+                                <button
+                                  key={m.doc_resource_id}
+                                  onClick={() => { setAddMaterialSelected(m); setAddMaterialQty(''); setAddMaterialError(''); }}
+                                  style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 10, border: '1px solid #f1f5f9', background: '#fff', cursor: 'pointer', fontSize: 13, color: '#1e293b' }}
+                                >
+                                  {m.name}
+                                </button>
+                              ))}
+                            {modalMaterials.filter(m => !modalDraftItems.some(it => it.doc_resource_id === m.doc_resource_id)).length === 0 && (
+                              <div style={{ textAlign: 'center', padding: 30, color: '#94a3b8', fontSize: 13 }}>
+                                {t.gpmPurchaseNoMaterials || 'Нет материалов с доступным остатком по проекту'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: '#1e293b', marginBottom: 8 }}>{addMaterialSelected.name}</div>
+                        <div style={{ fontSize: 12, color: '#64748b', marginBottom: 16 }}>
+                          {(t.gpmPurchaseColRemaining || 'Остаток по смете')}: {addMaterialSelected.remaining_quantity.toLocaleString('ru-RU')} {addMaterialSelected.unit}
+                        </div>
+                        <div style={{ marginBottom: 16 }}>
+                          <label style={labelStyle}>{t.gpmPurchaseColOrderQty || 'Количество'}</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max={addMaterialSelected.remaining_quantity}
+                            step="any"
+                            autoFocus
+                            value={addMaterialQty}
+                            onChange={e => { setAddMaterialQty(e.target.value); setAddMaterialError(''); }}
+                            style={selectStyle}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+                      <button
+                        onClick={() => setShowAddMaterialModal(false)}
+                        style={{ flex: 1, background: '#f1f5f9', border: 'none', padding: 12, borderRadius: 12, fontWeight: 700, cursor: 'pointer', color: '#64748b' }}
+                      >
+                        {t.btnCancel || 'Отменить'}
+                      </button>
+                      {addMaterialSelected && (
+                        <button
+                          onClick={handleConfirmAddMaterial}
+                          style={{ flex: 1, borderRadius: 12, fontWeight: 700, border: 'none', padding: 12, background: '#3b82f6', color: '#fff', cursor: 'pointer' }}
+                        >
+                          {t.btnAdd || 'Добавить'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : !showContent ? (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '100px 40px',
+              background: '#ffffff',
+              borderRadius: '16px',
+              border: '1px solid #e2e8f0',
+              textAlign: 'center',
+              boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+            }}>
+              <Package size={56} color="#3b82f6" style={{ marginBottom: '20px', background: '#eff6ff', padding: '12px', borderRadius: '16px' }} />
+              <h3 style={{ fontSize: '16px', fontWeight: '800', color: '#0f172a', marginBottom: '6px' }}>
+                {t.gpmParamsNotSelected || 'Параметры не выбраны'}
+              </h3>
+              <p style={{ fontSize: '13px', color: '#64748b', maxWidth: '380px', lineHeight: '1.6' }}>
+                {t.gpmParamsNotSelectedHint || 'Пожалуйста, выберите проект, объект и тип сметы в селекторах выше для планирования потребностей.'}
+              </p>
+            </div>
+          ) : (
+          <>
           {/* Сообщения об ошибках и успехе */}
           {error && (
             <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 14, padding: '14px 18px', marginBottom: 20, color: '#dc2626', fontSize: 14, display: 'flex', gap: 8 }}>
@@ -683,6 +1091,8 @@ export default function GpmPage({ api, lang, t, userRole }) {
                   )}
                 </div>
               )}
+            </>
+          )}
             </>
           )}
         </>

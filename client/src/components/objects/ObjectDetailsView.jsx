@@ -502,7 +502,8 @@ export default function ObjectDetailsView({
         {[
           { id: 'info', label: t.tabInfo || 'Информация' },
           { id: 'psd', label: t.tabPsd || 'ПСД' },
-          { id: 'estimate', label: t.tabEstimate || 'Структура WBS' },
+          // Временно скрыли по просьбе пользователя (вместе с кнопкой "Открыть WBS")
+          // { id: 'estimate', label: t.tabEstimate || 'Структура WBS' },
           // Временно скрыли по просьбе пользователя
           // { id: 'scheduling', label: t.tabScheduling || 'Календарное планирование' },
           { id: 'general_scheduling', label: t.tabGeneralScheduling || 'Общее календарное планирование' }
@@ -529,7 +530,8 @@ export default function ObjectDetailsView({
       <div style={{ flex: 1, minHeight: '400px' }}>
         {isInfoTab && renderInfoTab()}
         {isPsdTab && renderPsdTab()}
-        {isEstimatesTab && renderEstimateTab()}
+        {/* Временно скрыли по просьбе пользователя вместе с вкладкой выше */}
+        {/* {isEstimatesTab && renderEstimateTab()} */}
         {/* Временно скрыли по просьбе пользователя
         {isSchedulingTab && (
           <div style={{ background: 'white', padding: '24px', borderRadius: '20px', border: '1px solid #cbd5e1', display: 'flex', flexDirection: 'column', gap: '20px' }}>

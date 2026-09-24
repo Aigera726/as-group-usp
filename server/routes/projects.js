@@ -901,7 +901,40 @@ router.post('/projects/:id/create-estimate', async (req, res) => {
             return res.status(404).json({ error: 'Проект не найден' });
         }
 
+        // Проверка дубля: смета с такими же проектом/объектом/зоной/фазой/дисциплиной уже
+        // существует — не создаём вторую копию, а сообщаем фронтенду, какую открыть.
+        // Дисциплина сравнивается строгим равенством ("все дисциплины" — это отдельное
+        // самостоятельное значение, а не зонтик над конкретными): "все дисциплины" конфликтует
+        // только с другой сметой "для всех дисциплин", а конкретная дисциплина (например,
+        // "Фасад") — только с такой же конкретной, но не с "все дисциплины" и не с другими
+        // конкретными дисциплинами той же зоны/фазы.
+        // Этот мастер всегда создаёт "Рабочую" версию (estimate_type='work'), поэтому сравнение
+        // ведём только среди других "Рабочих" смет — "Плановая"/"Фактическая" версии того же
+        // конструктива создаются намеренно (кнопки "Создать плановую/фактическую версию") с теми
+        // же зоной/фазой/дисциплиной и дублями не являются.
+        if (zone && phase) {
+            let dupQuery = supabaseAdmin
+                .from('est_documents')
+                .select('id, discipline')
+                .eq('project_uuid', id)
+                .eq('estimate_type', 'work')
+                .eq('zone', zone)
+                .eq('phase', phase);
+            dupQuery = (objectId && objectId !== 'legacy')
+                ? dupQuery.eq('object_id', objectId)
+                : dupQuery.is('object_id', null);
+            dupQuery = discipline ? dupQuery.eq('discipline', discipline) : dupQuery.is('discipline', null);
 
+            // Не .maybeSingle() — тот падает с ошибкой, если совпадений больше одного (а в базе
+            // уже накопились старые дубли до этой проверки), и тогда сравнение молча "не находило"
+            // существующую смету. Просто смотрим, есть ли вообще хоть одна подходящая запись.
+            const { data: existingRows, error: dupErr } = await dupQuery;
+            if (dupErr) throw dupErr;
+            const existing = (existingRows || [])[0];
+            if (existing) {
+                return res.status(409).json({ error: 'DUPLICATE_ESTIMATE', existingId: existing.id });
+            }
+        }
 
         // 1. Находим регион проекта и получаем его country_id из dic_regions
         let projectCountryId = null;

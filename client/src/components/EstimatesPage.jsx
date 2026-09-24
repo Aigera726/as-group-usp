@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus,
   FileText,
@@ -8,8 +8,8 @@ import {
   CheckCircle,
   FolderOpen,
   Trash2,
-  Calendar,
-  Copy
+  Copy,
+  SlidersHorizontal
 } from 'lucide-react';
 import EstimateEditor from './EstimateEditor';
 
@@ -19,6 +19,10 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState(null);
   const [creatingEstimate, setCreatingEstimate] = useState(false);
+  const tableScrollRef = useRef(null);
+  const scrollTable = (direction) => {
+    tableScrollRef.current?.scrollBy({ left: direction * 320, behavior: 'smooth' });
+  };
   const [estimateTypeTab, setEstimateTypeTab] = useState('work'); // 'work' | 'planned' | 'actual'
 
   // Opened estimate in-place
@@ -55,6 +59,8 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
   const [filterStatus, setFilterStatus] = useState('');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const activeFilterCount = [filterProject, filterObject, filterZone, filterPhase, filterDiscipline, filterStatus, filterDateFrom, filterDateTo].filter(Boolean).length;
 
   // Extract unique values from loaded estimates for filters
   const uniqueProjects = useMemo(() => {
@@ -158,6 +164,35 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
   useEffect(() => {
     setFilterDiscipline('');
   }, [filterPhase]);
+
+  // Список статусов у рабочей/плановой/фактической сметы — РАЗНЫЙ (draft/pending/approved
+  // у рабочей, planned_formed/planned_review/... у плановой, actual_formed у фактической),
+  // см. statusFilterOptions ниже. Раньше здесь ещё и автоматически сбрасывался выбранный статус
+  // при каждом переключении вкладки — но это сбрасывало фильтр, который человек только что
+  // поставил, и выглядело как «фильтры пропадают». Теперь ничего не сбрасываем сами: если
+  // выбранный статус не подходит новой вкладке, он просто не совпадёт ни с одной записью
+  // (пользователь увидит это в списке и сам переключит), а не исчезнет незаметно.
+
+  const statusFilterOptions = useMemo(() => {
+    if (estimateTypeTab === 'planned') {
+      return [
+        { value: 'planned_formed', label: t.estEdStatusFormed || 'Сформирована' },
+        { value: 'planned_review', label: t.estEdStatusReview || 'На утверждении' },
+        { value: 'planned_approved', label: t.estEdStatusApproved || 'Утверждена' },
+        { value: 'planned_rejected', label: t.estEdStatusRejected || 'Отклонена' },
+      ];
+    }
+    if (estimateTypeTab === 'actual') {
+      return [
+        { value: 'actual_formed', label: t.estEdStatusFormed || 'Сформирована' },
+      ];
+    }
+    return [
+      { value: 'draft', label: t.estPageStatusDraft || 'Черновик' },
+      { value: 'pending', label: t.estPageStatusPending || 'На согласовании' },
+      { value: 'approved', label: t.estPageStatusApproved || 'Утверждено' },
+    ];
+  }, [estimateTypeTab, t]);
 
   // Computed filtered list of estimates
   const filteredEstimates = useMemo(() => {
@@ -461,7 +496,15 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
         setOpenedEstimateId(estId);
       }
     } catch (err) {
-      alert('Ошибка создания сметы: ' + (err.response?.data?.error || err.message));
+      const errCode = err.response?.data?.error;
+      if (err.response?.status === 409 && errCode === 'DUPLICATE_ESTIMATE') {
+        const existingId = err.response?.data?.existingId;
+        alert(t.estDuplicateFoundText || 'С такими параметрами смета уже существует. Нажмите ОК — она откроется.');
+        setShowWizard(false);
+        if (existingId) setOpenedEstimateId(existingId);
+        return;
+      }
+      alert('Ошибка создания сметы: ' + (errCode || err.message));
     } finally {
       setCreatingEstimate(false);
     }
@@ -510,7 +553,8 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
       <div style={{
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
         background: 'rgba(15, 23, 42, 0.45)', backdropFilter: 'blur(8px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center', zIndex: 1100,
+        overflowY: 'auto', paddingTop: '48px', paddingBottom: '48px'
       }}>
         <div style={{
           background: '#ffffff', borderRadius: '24px', width: '850px', maxWidth: '95%',
@@ -841,6 +885,24 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
         </div>
       )}
 
+      {estimates.length > 0 && (
+        <button
+          onClick={() => setShowFilterModal(true)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '6px', width: 'fit-content',
+            padding: '8px 14px', background: activeFilterCount > 0 ? '#eff6ff' : '#ffffff',
+            border: `1.5px solid ${activeFilterCount > 0 ? '#93c5fd' : '#cbd5e1'}`,
+            borderRadius: '10px', fontSize: '13px', fontWeight: '700',
+            color: activeFilterCount > 0 ? '#2563eb' : '#475569', cursor: 'pointer'
+          }}
+        >
+          <SlidersHorizontal size={14} /> {t.estPageFiltersTitle || 'Фильтры'}
+          {activeFilterCount > 0 && (
+            <span style={{ background: '#2563eb', color: 'white', borderRadius: '10px', padding: '1px 7px', fontSize: '11px' }}>{activeFilterCount}</span>
+          )}
+        </button>
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '60px', color: '#64748b' }}>{t.loadingEstimate || 'Загрузка смет...'}</div>
       ) : estimates.length === 0 ? (
@@ -856,22 +918,36 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
         </div>
       ) : (
         <>
-          {/* Filters Card */}
-          <div style={{
+          {/* Окно фильтров — раньше было всегда открытой панелью прямо на странице, которая
+              «прыгала»/сдвигала таблицу при каждом переключении вкладки версии (менялась высота
+              панели из-за разного набора опций). Теперь это отдельное модальное окно по кнопке
+              «Фильтры» — сама страница больше не скачет, а таблица занимает всё свободное место. */}
+          {showFilterModal && (
+          <div
+            onClick={() => setShowFilterModal(false)}
+            style={{ background: 'rgba(15, 23, 42, 0.5)', backdropFilter: 'blur(4px)', position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '20px', overflowY: 'auto', paddingTop: '48px' }}
+          >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
             background: '#ffffff',
             borderRadius: '16px',
             border: '1.5px solid #cbd5e1',
             padding: '20px',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.03)',
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.2)',
             display: 'flex',
             flexDirection: 'column',
             gap: '16px',
-            marginBottom: '10px'
+            width: '100%',
+            maxWidth: '760px',
+            maxHeight: '85vh',
+            overflowY: 'auto'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f1f5f9', paddingBottom: '10px' }}>
               <span style={{ fontSize: '14px', fontWeight: '800', color: '#1e293b', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                🔍 {t.estPageFiltersTitle || 'Фильтрация списка смет'}
+                <SlidersHorizontal size={16} /> {t.estPageFiltersTitle || 'Фильтры'}
               </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
               {(filterProject || filterObject || filterZone || filterPhase || filterDiscipline || filterStatus || filterDateFrom || filterDateTo) && (
                 <button
                   onClick={() => {
@@ -891,8 +967,16 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
                   <X size={14} /> {t.estPageBtnReset || 'Сбросить фильтры'}
                 </button>
               )}
+              <button
+                onClick={() => setShowFilterModal(false)}
+                title={t.estPageBtnClose || 'Закрыть'}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+              >
+                <X size={20} />
+              </button>
+              </div>
             </div>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '14px' }}>
               {/* Project */}
               <div>
@@ -978,9 +1062,9 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
                   style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', outline: 'none' }}
                 >
                   <option value="">{t.estPageFilterAllStatuses || 'Все статусы'}</option>
-                  <option value="draft">{t.estPageStatusDraft || 'Черновик'}</option>
-                  <option value="pending">{t.estPageStatusPending || 'На согласовании'}</option>
-                  <option value="approved">{t.estPageStatusApproved || 'Утверждено'}</option>
+                  {statusFilterOptions.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
                 </select>
               </div>
 
@@ -1007,6 +1091,8 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
               </div>
             </div>
           </div>
+          </div>
+          )}
 
           {filteredEstimates.length === 0 ? (
             <div style={{
@@ -1038,7 +1124,25 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
             </div>
           ) : (
             <div style={{ background: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-              <div style={{ overflowX: 'auto' }}>
+              {/* Стрелки для горизонтальной прокрутки широкой таблицы — колонки Зона/Фаза/Дисциплина
+                  делают таблицу шире экрана, а тянуть нижний скроллбар неудобно. */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }}>
+                <button
+                  onClick={() => scrollTable(-1)}
+                  title={t.estPageScrollLeft || 'Прокрутить влево'}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#475569', cursor: 'pointer' }}
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  onClick={() => scrollTable(1)}
+                  title={t.estPageScrollRight || 'Прокрутить вправо'}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', color: '#475569', cursor: 'pointer' }}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+              <div ref={tableScrollRef} style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
@@ -1046,13 +1150,9 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
                     <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColName || 'Наименование сметы'}</th>
                     <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColProject || 'Проект'}</th>
                     <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColObject || 'Объект'}</th>
-                    {estimateTypeTab !== 'planned' && (
-                      <>
-                        <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColZone || 'Зона'}</th>
-                        <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColPhase || 'Фаза'}</th>
-                        <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColDiscipline || 'Дисциплина'}</th>
-                      </>
-                    )}
+                    <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColZone || 'Зона'}</th>
+                    <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColPhase || 'Фаза'}</th>
+                    <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>{t.estPageColDiscipline || 'Дисциплина'}</th>
                     <th style={{ padding: '12px 20px', fontSize: '12px', fontWeight: '800', color: '#475569' }}>
                       {estimateTypeTab === 'planned' ? (t.estPageColSubmittedDate || 'Дата отправки') : (t.estPageColDate || 'Дата создания')}
                     </th>
@@ -1130,19 +1230,15 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
                         <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
                           {objectName}
                         </td>
-                        {estimateTypeTab !== 'planned' && (
-                          <>
-                            <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
-                              {meta.zone}
-                            </td>
-                            <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
-                              {meta.phase}
-                            </td>
-                            <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
-                              {meta.discipline}
-                            </td>
-                          </>
-                        )}
+                        <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
+                          {meta.zone}
+                        </td>
+                        <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
+                          {meta.phase}
+                        </td>
+                        <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
+                          {meta.discipline}
+                        </td>
                         <td style={{ padding: '14px 20px', fontSize: '13px', color: '#475569' }}>
                           {formattedDate}
                         </td>
@@ -1178,28 +1274,6 @@ export default function EstimatesPage({ api, lang = 'ru', setLang, t = {}, userR
                           >
                             {t.estPageBtnOpen || 'Открыть'}
                           </button>
-                          {onOpenScheduling && !est.parent_doc_id && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onOpenScheduling({
-                                  projectId: est.project_uuid || est.projects?.id || null,
-                                  objectId: est.object_id || null,
-                                  estimateId: est.id
-                                });
-                              }}
-                              style={{
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                padding: '6px', background: '#16a34a', color: 'white',
-                                border: 'none', borderRadius: '6px', cursor: 'pointer', transition: 'background 0.2s'
-                              }}
-                              title={t.tabScheduling || 'Календарное планирование'}
-                              onMouseEnter={(e) => e.currentTarget.style.background = '#15803d'}
-                              onMouseLeave={(e) => e.currentTarget.style.background = '#16a34a'}
-                            >
-                              <Calendar size={14} />
-                            </button>
-                          )}
                           {activePlan && (
                             <button
                               onClick={(e) => {
